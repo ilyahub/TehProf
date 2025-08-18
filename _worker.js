@@ -2,7 +2,7 @@ export default {
   async fetch(request) {
     // ------------ НАСТРОЙКА -------------
     const DEAL_FIELD_CODE = 'UF_CRM_1755533553'; // ваше множественное поле со связями
-    const SMART_ENTITY_TYPE_ID = 196;            // <-- ПОДСТАВЬТЕ ваш ENTITY_TYPE_ID SPA
+    const SMART_ENTITY_TYPE_ID = 1032;            // <-- ПОДСТАВЬТЕ ваш ENTITY_TYPE_ID SPA
     const PORTAL = 'https://tehprof.bitrix24.kz';
     // ------------------------------------
 
