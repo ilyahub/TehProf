@@ -2,11 +2,11 @@ export default {
   async fetch(request) {
     // ====== НАСТРОЙКА ======
     const DEAL_FIELD_CODE = 'UF_CRM_1755533553'; // множественное поле в сделке
-    const SMART_ENTITY_TYPE_ID = 1032;           // ваш SPA ENTITY_TYPE_ID
+    const SMART_ENTITY_TYPE_ID = 1032;          // ваш SPA ENTITY_TYPE_ID
     const PORTAL_ORIGIN = 'https://tehprof.bitrix24.kz';
     // =======================
 
-    // Снимем POST-снапшот для раннего dealId
+    // Снимем POST-снапшот (для раннего Deal ID)
     let placement = null, placementOptions = '';
     try {
       if (request.method !== 'GET') {
@@ -23,7 +23,7 @@ export default {
       }
     } catch (_) {}
 
-    // Вшиваем SDK
+    // Подтянем SDK и заинлайним
     let sdk = '';
     try { const r = await fetch('https://api.bitrix24.com/api/v1/'); sdk = await r.text(); }
     catch { sdk = "throw new Error('BX24 SDK fetch failed')"; }
@@ -65,6 +65,20 @@ export default {
   .stage{display:flex;align-items:center;gap:10px}
   .bar{position:relative;flex:0 0 120px;height:10px;border-radius:999px;background:#edeef3;overflow:hidden}
   .bar>i{position:absolute;left:0;top:0;bottom:0;background:#a5b4fc}
+
+  /* ===== ПИКЕР (модалка) ===== */
+  .modal{position:fixed;inset:0;background:rgba(17,24,39,.5);display:none;align-items:center;justify-content:center;z-index:9999}
+  .modal.open{display:flex}
+  .modal-card{width:min(920px,95vw);max-height:85vh;background:#fff;border-radius:16px;border:1px solid var(--line);display:flex;flex-direction:column}
+  .modal-head{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;gap:12px;align-items:center}
+  .modal-body{padding:0;height:60vh;overflow:auto}
+  .modal-foot{padding:12px 16px;border-top:1px solid var(--line);display:flex;gap:10px;justify-content:flex-end}
+  .input{flex:1;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+  .list{width:100%;border-collapse:collapse}
+  .list th,.list td{border-bottom:1px solid var(--line);padding:10px 12px}
+  .list th{text-align:left;background:#fafbff}
+  .list tr:hover{background:#fafafa}
+  .right{margin-left:auto}
 </style>
 </head><body>
   <h1>Виджет сделки</h1>
@@ -100,26 +114,57 @@ export default {
     </table>
   </div>
 
+  <!-- ПИКЕР -->
+  <div class="modal" id="picker">
+    <div class="modal-card">
+      <div class="modal-head">
+        <strong>Выбор элементов смарт-процесса</strong>
+        <input class="input" id="q" placeholder="Поиск по названию…" />
+        <button class="btn" id="btnSearch">Найти</button>
+        <button class="btn" id="btnReset">Сброс</button>
+        <span class="right muted tiny" id="pgInfo"></span>
+      </div>
+      <div class="modal-body">
+        <table class="list" id="pickList">
+          <thead><tr><th style="width:48px"><input type="checkbox" id="pickAll"></th><th style="width:80px">ID</th><th>Название</th></tr></thead>
+          <tbody id="pickRows"><tr><td colspan="3" class="muted">Загрузка…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="btnMore">Загрузить ещё</button>
+        <button class="btn" id="btnClose">Отмена</button>
+        <button class="btn primary" id="btnAttach">Добавить выбранные</button>
+      </div>
+    </div>
+  </div>
+
   <script>window.__BOOT__ = ${JSON.stringify({ placement, placementOptions })};</script>
   <script>${sdk}</script>
 
   <script>
   // ===== helpers =====
   const $ = s => document.querySelector(s);
-  const ui = { id:$('#dealId'), plc:$('#placement'), rows:$('#rows'), hint:$('#hint'),
-               create:$('#btnCreate'), pick:$('#btnPick'), ref:$('#btnRefresh') };
+  const ui = {
+    id:$('#dealId'), plc:$('#placement'), rows:$('#rows'),
+    create:$('#btnCreate'), pick:$('#btnPick'), ref:$('#btnRefresh'), hint:$('#hint'),
+    // picker
+    picker:$('#picker'), q:$('#q'), btnSearch:$('#btnSearch'), btnReset:$('#btnReset'),
+    pickRows:$('#pickRows'), pickAll:$('#pickAll'), btnMore:$('#btnMore'),
+    btnClose:$('#btnClose'), btnAttach:$('#btnAttach'), pgInfo:$('#pgInfo')
+  };
   const A = v => !v ? [] : (Array.isArray(v) ? v : [v]);
   const J = s => { try{return JSON.parse(s)}catch{return{} } };
   const bcode=(t,id)=>\`DYNAMIC_\${t}_\${id}\`;
   const toIdFromBinding=(code,t)=>{ const m=String(code||'').match(/DYNAMIC_(\\d+)_(\\d+)/); return m&&Number(m[1])==Number(t)?Number(m[2]):null; };
 
-  // поля SPA (подстрой при необходимости)
   const COLS={title:'title',stageId:'stageId',categoryId:'categoryId',assigned:'assignedById',
               address:'UF_ADDRESS',shipType:'UF_SHIP_METHOD',shipDate:'UF_SHIP_DATE'};
 
-  // ===== state =====
   const S={ dealId:null, field:'${DEAL_FIELD_CODE}', typeId:${SMART_ENTITY_TYPE_ID}, mode:'ids',
-           bindings:[], ids:[], items:[], users:{}, stages:{}, cats:{} };
+           bindings:[], ids:[], items:[], users:{}, stages:{}, cats:{},
+           // picker state
+           pk:{ page:0, pageSize:50, query:'', totalShown:0, selected:new Set(), loading:false }
+  };
 
   // авто-подгон высоты
   const fit = (() => { let raf; return function(){ if(!window.BX24) return;
@@ -168,7 +213,7 @@ export default {
 
       fetchItems(S.ids, async (items)=>{
         S.items = items;
-        await buildDictionaries(items);  // пользователи + стадии (имена и порядок)
+        await buildDictionaries(items);  // пользователи + стадии
         render(); ui.hint.textContent=''; fit();
       });
     });
@@ -186,9 +231,8 @@ export default {
     });
   }
 
-  // подгружаем имена пользователей и названия стадий
+  // словари: пользователи и стадии
   async function buildDictionaries(items){
-    // ответственные
     const userIds = Array.from(new Set(items.map(i=>Number(i[COLS.assigned])).filter(Boolean)));
     if (userIds.length){
       const calls={}; userIds.forEach((uid,i)=>calls['u'+i]=['user.get',{ID:uid}]);
@@ -197,17 +241,14 @@ export default {
         res();
       }, true));
     }
-    // стадии (по каждой категории своя последовательность)
     const cats = Array.from(new Set(items.map(i=>Number(i.categoryId)).filter(Boolean)));
     if (cats.length){
       const calls={}; cats.forEach((cid,i)=>calls['s'+i]=['crm.category.stage.list',{entityTypeId:S.typeId,categoryId:cid}]);
       await new Promise(res=>BX24.callBatch(calls, r=>{
         for(const k in r){ if(!r[k].error()){ const list=r[k].data().stages||[];
           list.forEach(st=>{ S.stages[st.statusId] = { name:st.name, sort:Number(st.sort)||0, categoryId:st.categoryId }; });
-        }}
-        res();
+        }} res();
       }, true));
-      // сохраним макс sort по каждой категории для процента
       cats.forEach(cid=>{
         const list = Object.values(S.stages).filter(s=>s.categoryId===cid);
         const max = list.length ? Math.max(...list.map(s=>s.sort)) : 100;
@@ -275,38 +316,63 @@ export default {
     }
   }
 
-  // Кнопки как в списке SPA
+  // ==== ПИКЕР ====
+  function openPicker(){ ui.picker.classList.add('open'); S.pk.page=0; S.pk.totalShown=0; S.pk.selected=new Set(); ui.pickAll.checked=false; ui.pgInfo.textContent=''; loadPickerPage(true); }
+  function closePicker(){ ui.picker.classList.remove('open'); }
+  function loadPickerPage(reset=false){
+    if (S.pk.loading) return; S.pk.loading=true;
+    if (reset){ S.pk.page=0; S.pk.totalShown=0; ui.pickRows.innerHTML='<tr><td colspan="3" class="muted">Загрузка…</td></tr>'; }
+    const start = S.pk.page * S.pk.pageSize;
+    const filter = S.pk.query ? { '%title': S.pk.query } : {}; // подстрочный поиск по названию
+    BX24.callMethod('crm.item.list',{
+      entityTypeId:S.typeId, filter, order:{'id':'DESC'}, select:['id','title'], start
+    }, r=>{
+      S.pk.loading=false;
+      if (r.error()){ ui.pickRows.innerHTML='<tr><td colspan="3" class="err">'+r.error_description()+'</td></tr>'; return; }
+      const items=r.data().items||[];
+      if (reset) ui.pickRows.innerHTML='';
+      if (!items.length && reset){ ui.pickRows.innerHTML='<tr><td colspan="3" class="muted">Ничего не найдено</td></tr>'; ui.pgInfo.textContent=''; return; }
+      items.forEach(it=>{
+        const tr=document.createElement('tr');
+        tr.innerHTML=\`<td><input type="checkbox" data-id="\${it.id}"></td><td>\${it.id}</td><td>\${it.title||('#'+it.id)}</td>\`;
+        ui.pickRows.appendChild(tr);
+      });
+      S.pk.totalShown += items.length;
+      ui.pgInfo.textContent = 'Показано: '+S.pk.totalShown;
+      S.pk.page++;
+    });
+  }
+
+  ui.pickAll.onchange = () => {
+    ui.pickRows.querySelectorAll('input[type="checkbox"][data-id]').forEach(ch=>{
+      ch.checked = ui.pickAll.checked;
+      const id = Number(ch.getAttribute('data-id'));
+      if (ch.checked) S.pk.selected.add(id); else S.pk.selected.delete(id);
+    });
+  };
+  ui.pickRows.addEventListener('change', (e)=>{
+    const t=e.target; if (t && t.matches('input[type="checkbox"][data-id]')){
+      const id=Number(t.getAttribute('data-id')); if (t.checked) S.pk.selected.add(id); else S.pk.selected.delete(id);
+    }
+  });
+  ui.btnMore.onclick = () => loadPickerPage(false);
+  ui.btnSearch.onclick = () => { S.pk.query = ui.q.value.trim(); openPicker(); };
+  ui.btnReset.onclick = () => { ui.q.value=''; S.pk.query=''; openPicker(); };
+  ui.btnClose.onclick = () => closePicker();
+  ui.btnAttach.onclick = () => { const ids = Array.from(S.pk.selected); if (ids.length) attach(ids); closePicker(); };
+
+  // ==== КНОПКИ ВЕРХНЕЙ ПАНЕЛИ ====
   ui.ref.onclick = load;
 
   ui.create.onclick = ()=>{
     // открываем слайдер создания элемента SPA
     BX24.openPath(\`/crm/type/\${S.typeId}/details/0/\`);
-    // Подскажем обновить после сохранения (Bitrix не шлёт нам событие закрытия из другого фрейма)
     ui.hint.textContent='Сохраните элемент в открывшемся окне и нажмите «Обновить».';
   };
 
   ui.pick.onclick = ()=>{
-    // красивый диалог, если доступен
-    if (window.BX && BX.UI && BX.UI.EntitySelector){
-      try{
-        const dlg = new BX.UI.EntitySelector.Dialog({
-          target: ui.pick,
-          entities: [{ id:'dynamic', dynamicLoad:true, entityTypeId:S.typeId }],
-          multiple: true, dropdownMode: true, enableSearch: true, width: 550
-        });
-        dlg.show();
-        dlg.subscribe('onSave', ()=>{
-          const ids = dlg.getSelectedItems().map(i=>Number(i.getId())).filter(Boolean);
-          if (ids.length) attach(ids);
-        });
-        return;
-      }catch(_){}
-    }
-    // фолбэк — ввод ID вручную
-    const raw = prompt('Введите ID элементов смарт-процесса (через запятую)');
-    if(!raw) return;
-    const ids = raw.split(',').map(s=>Number(s.trim())).filter(Boolean);
-    if (ids.length) attach(ids);
+    // если на портале есть родной селектор — можно легко включить, но делаем независимый встроенный пикер:
+    openPicker();
   };
   </script>
 </body></html>`;
