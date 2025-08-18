@@ -1,12 +1,12 @@
 export default {
   async fetch(request) {
-    // ------------ НАСТРОЙКА -------------
-    const DEAL_FIELD_CODE = 'UF_CRM_1755533553'; // ваше множественное поле со связями
-    const SMART_ENTITY_TYPE_ID = 1032;            // <-- ПОДСТАВЬТЕ ваш ENTITY_TYPE_ID SPA
-    const PORTAL = 'https://tehprof.bitrix24.kz';
-    // ------------------------------------
+    // ========= НАСТРОЙКА =========
+    const DEAL_FIELD_CODE = 'UF_CRM_1755533553';  // ваше множественное поле со связями
+    const SMART_ENTITY_TYPE_ID = 1032;            // <-- ПОДСТАВЬТЕ свой ENTITY_TYPE_ID SPA
+    const PORTAL_ORIGIN = 'https://tehprof.bitrix24.kz';
+    // =============================
 
-    // 1) читаем POST (PLACEMENT / PLACEMENT_OPTIONS)
+    // 1) Снимем снапшот POST (PLACEMENT / PLACEMENT_OPTIONS) — пригодится для раннего dealId
     let placement = null, placementOptions = '';
     try {
       if (request.method !== 'GET') {
@@ -23,12 +23,12 @@ export default {
       }
     } catch (_) {}
 
-    // 2) подтягиваем SDK и заинлайнем
+    // 2) Подтянем SDK и заинлайним
     let sdk = '';
     try { const r = await fetch('https://api.bitrix24.com/api/v1/'); sdk = await r.text(); }
-    catch { sdk = "throw new Error('BX24 SDK fetch failed');"; }
+    catch { sdk = "throw new Error('BX24 SDK fetch failed')"; }
 
-    // 3) html
+    // 3) Отдадим HTML (одинаковый для GET/POST)
     const html = `<!doctype html>
 <html lang="ru"><head>
 <meta charset="utf-8">
@@ -43,15 +43,23 @@ export default {
   .btn.primary{background:var(--blue);color:#fff;border-color:var(--blue)}
   .pill{padding:2px 8px;border-radius:9999px;background:#eef2ff;color:#4338ca;font-weight:600;font-size:12px}
   .muted{color:var(--mut)} .ok{color:var(--green)} .err{color:var(--red)}
-  table{width:100%;border-collapse:separate;border-spacing:0;background:#fff;border:1px solid var(--line);border-radius:14px;overflow:hidden}
-  th,td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
+  .grid2{display:grid;grid-template-columns:auto 1fr;gap:8px 12px;margin-bottom:8px}
+  /* таблица */
+  .table-wrap{overflow:auto}
+  table{width:100%;border-collapse:separate;border-spacing:0;background:#fff;border:1px solid var(--line);
+        border-radius:14px;overflow:hidden;table-layout:fixed}
+  th,td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:middle;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   th{background:#fafbff;color:#374151;text-align:left;font-weight:700}
   tr:last-child td{border-bottom:none}
   .actions{display:flex;gap:8px}
   .link{color:var(--blue);cursor:pointer;text-decoration:none}
-  .chip{display:inline-flex;gap:6px;align-items:center;padding:4px 8px;background:#f3f4f6;border:1px solid var(--line);border-radius:999px}
-  .tiny{font-size:12px}
-  .grid2{display:grid;grid-template-columns:auto 1fr;gap:8px 12px;margin-bottom:8px}
+  .chip{display:inline-block;max-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  td.wrap{white-space:normal}
+  th.col-id, td.col-id{width:72px}
+  th.col-assignee, td.col-assignee{width:160px}
+  th.col-stage, td.col-stage{width:140px}
+  th.col-ship, td.col-ship{width:160px}
+  th.col-date, td.col-date{width:140px}
 </style>
 </head><body>
   <h1>Виджет сделки</h1>
@@ -68,22 +76,25 @@ export default {
     <span class="tiny muted" id="hint"></span>
   </div>
 
-  <table id="tbl">
-    <thead>
-      <tr>
-        <th style="width:72px">ID</th><th>Название</th>
-        <th style="width:160px">Ответственный (ID)</th>
-        <th style="width:140px">Стадия</th>
-        <th style="width:180px">Адрес</th>
-        <th style="width:160px">Доставка</th>
-        <th style="width:140px">Дата</th>
-        <th style="width:160px">Действия</th>
-      </tr>
-    </thead>
-    <tbody id="rows"><tr><td colspan="8" class="muted">Загрузка…</td></tr></tbody>
-  </table>
+  <div class="table-wrap">
+    <table id="tbl">
+      <thead>
+        <tr>
+          <th class="col-id">ID</th>
+          <th>Название</th>
+          <th class="col-assignee">Ответственный (ID)</th>
+          <th class="col-stage">Стадия</th>
+          <th>Адрес</th>
+          <th class="col-ship">Доставка</th>
+          <th class="col-date">Дата</th>
+          <th style="width:160px">Действия</th>
+        </tr>
+      </thead>
+      <tbody id="rows"><tr><td colspan="8" class="muted">Загрузка…</td></tr></tbody>
+    </table>
+  </div>
 
-  <!-- передаём снапшот POST -->
+  <!-- снапшот POST -->
   <script>window.__BOOT__ = ${JSON.stringify({ placement, placementOptions })};</script>
   <!-- SDK -->
   <script>${sdk}</script>
@@ -93,39 +104,76 @@ export default {
   const $ = s => document.querySelector(s);
   const ui = { id:$('#dealId'), plc:$('#placement'), rows:$('#rows'), hint:$('#hint'), add:$('#btnAdd'), ref:$('#btnRefresh') };
   const A = v => !v ? [] : (Array.isArray(v) ? v : [v]);
-  const J = s => { try{return JSON.parse(s)}catch{return{}} };
+  const J = s => { try{return JSON.parse(s)}catch{return{} } };
   const bcode=(t,id)=>\`DYNAMIC_\${t}_\${id}\`;
   const toIdFromBinding=(code,t)=>{ const m=String(code||'').match(/DYNAMIC_(\\d+)_(\\d+)/); return m&&Number(m[1])==Number(t)?Number(m[2]):null; };
   const COLS={title:'title',stageId:'stageId',assigned:'assignedById',address:'UF_ADDRESS',shipType:'UF_SHIP_METHOD',shipDate:'UF_SHIP_DATE'};
 
   // ===== state =====
   const S={ dealId:null, field:'${DEAL_FIELD_CODE}', typeId:${SMART_ENTITY_TYPE_ID}, mode:'ids', bindings:[], ids:[], items:[] };
+  let loadedOnce = false;
 
-  // 0) фолбэк из POST: покажем placement и dealId сразу
+  // ——— авто-подгон высоты (только высота; ширину в CRM-вкладке Битрикс не меняет) ———
+  const fit = (() => {
+    let raf;
+    return function fit() {
+      if (!window.BX24) return;
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const h = Math.max(
+          document.body.scrollHeight,
+          document.documentElement.scrollHeight
+        ) + 12;
+        try { BX24.resizeWindow(h); } catch(e){}
+      });
+    };
+  })();
+  new ResizeObserver(() => fit()).observe(document.body);
+
+  // ——— умный старт: берём ID откуда угодно и как можно раньше ———
   (function fromPost(){
     const boot = window.__BOOT__||{};
     if (boot.placement) ui.plc.textContent = boot.placement;
-    const sid = J(boot.placementOptions||'{}').ID || null;
-    if (sid) { ui.id.textContent = sid; S.dealId = Number(sid); }
+    const pid = J(boot.placementOptions||'{}').ID || null;
+    if (pid) { S.dealId = Number(pid); ui.id.textContent = S.dealId; }
   })();
 
-  // 1) старт SDK
   BX24.init(function(){
+    // 1) сразу попробуем вытащить ID из PLACEMENT_OPTIONS SDK
+    if (!S.dealId) {
+      const p = BX24.getParam('PLACEMENT_OPTIONS');
+      const pid = (J(p||'{}').ID) || null;
+      if (pid) { S.dealId = Number(pid); ui.id.textContent = S.dealId; }
+    }
+
+    let started = false;
+    function startOnce(){
+      if (started || !S.dealId) return;
+      started = true;
+      load();
+      fit();
+    }
+
+    // 2) параллельно ждём placement.info
     BX24.placement.info(function(info){
       ui.plc.textContent = info?.placement || ui.plc.textContent || '—';
       const id = info?.options?.ID || info?.options?.ENTITY_ID || null;
-      if (id) { S.dealId = Number(id); ui.id.textContent = id; }
-      if (!S.dealId){ ui.rows.innerHTML = '<tr><td colspan="8" class="err">ID is not defined or invalid.</td></tr>'; return; }
-      load(); fit();
+      if (id && !S.dealId) { S.dealId = Number(id); ui.id.textContent = S.dealId; }
+      startOnce();
     });
+
+    // 3) если у нас уже есть dealId (из POST или getParam), не ждём — стартуем через 300мс
+    setTimeout(startOnce, 300);
+
+    // 4) запасной гард — вдруг info не придёт
+    setTimeout(startOnce, 1500);
   });
 
-  function fit(){ try{ BX24 && BX24.resizeWindow(document.documentElement.scrollHeight, 200);}catch(e){} }
-  addEventListener('load',fit); addEventListener('resize',fit); setInterval(fit,900);
-
+  // ——— основная логика загрузки ———
   function detectMode(raw){ const a=A(raw); return a.some(v=>typeof v==='string' && v.startsWith('DYNAMIC_'))?'bindings':'ids'; }
 
   function load(){
+    if (!S.dealId){ ui.rows.innerHTML = '<tr><td colspan="8" class="err">ID is not defined or invalid.</td></tr>'; return; }
     ui.hint.textContent='Загрузка…';
     BX24.callMethod('crm.deal.get', {id:S.dealId}, r=>{
       if(r.error()){ ui.rows.innerHTML='<tr><td colspan="8" class="err">'+r.error_description()+'</td></tr>'; ui.hint.textContent=''; return; }
@@ -136,8 +184,8 @@ export default {
         ? S.bindings.map(c=>toIdFromBinding(c,S.typeId)).filter(Boolean)
         : A(raw).map(Number).filter(Boolean);
 
-      if(!S.ids.length){ ui.rows.innerHTML='<tr><td colspan="8" class="muted">Нет привязок</td></tr>'; ui.hint.textContent=''; return; }
-      fetchItems(S.ids, items=>{ S.items=items; render(); ui.hint.textContent=''; });
+      if(!S.ids.length){ ui.rows.innerHTML='<tr><td colspan="8" class="muted">Нет привязок</td></tr>'; ui.hint.textContent=''; fit(); return; }
+      fetchItems(S.ids, items=>{ S.items=items; render(); ui.hint.textContent=''; loadedOnce = true; fit(); });
     });
   }
 
@@ -159,13 +207,13 @@ export default {
       const id=it.id;
       const tr=document.createElement('tr');
       tr.innerHTML=\`
-        <td>\${id}</td>
+        <td class="col-id">\${id}</td>
         <td><a class="link" data-open="\${id}">\${it[COLS.title]||('#'+id)}</a></td>
-        <td>\${it[COLS.assigned] ?? '—'}</td>
-        <td><span class="chip">\${it[COLS.stageId] ?? '—'}</span></td>
-        <td>\${it[COLS.address] ?? '—'}</td>
-        <td>\${it[COLS.shipType] ?? '—'}</td>
-        <td>\${it[COLS.shipDate] ?? '—'}</td>
+        <td class="col-assignee">\${it[COLS.assigned] ?? '—'}</td>
+        <td class="col-stage"><span class="chip">\${it[COLS.stageId] ?? '—'}</span></td>
+        <td class="wrap">\${it[COLS.address] ?? '—'}</td>
+        <td class="col-ship">\${it[COLS.shipType] ?? '—'}</td>
+        <td class="col-date">\${it[COLS.shipDate] ?? '—'}</td>
         <td class="actions">
           <button class="btn" data-open="\${id}">Открыть</button>
           <button class="btn" data-del="\${id}">Удалить</button>
@@ -212,12 +260,12 @@ export default {
     return new Response(html, {
       headers: {
         'content-type': 'text/html; charset=utf-8',
-        // ВАЖНО: вернули 'unsafe-eval' и оставили iframe-только от вашего портала
+        // Разрешаем всё нужное SDK, но встраивание — только вашим порталом
         'content-security-policy':
           "default-src 'self' data: blob:; " +
           "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
           "style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src *; " +
-          "frame-ancestors " + PORTAL + " https://*.bitrix24.kz",
+          "frame-ancestors " + PORTAL_ORIGIN + " https://*.bitrix24.kz",
         'cache-control': 'no-store'
       }
     });
