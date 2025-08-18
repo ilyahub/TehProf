@@ -1,24 +1,39 @@
 export default {
   async fetch(request) {
-    // ------------- CONFIG -------------
-    const CONFIG = {
-      DEAL_FIELD_CODE: 'UF_CRM_1755533553', // ваше поле сделки (множественное)
-      SMART_ENTITY_TYPE_ID: 1032,            // <-- УКАЖИТЕ ID вашего смарт-процесса!
-      PORTAL_ORIGIN: 'https://tehprof.bitrix24.kz', // для frame-ancestors
-    };
-    // -----------------------------------
+    // ------------ НАСТРОЙКА -------------
+    const DEAL_FIELD_CODE = 'UF_CRM_1755533553'; // ваше множественное поле со связями
+    const SMART_ENTITY_TYPE_ID = 196;            // <-- ПОДСТАВЬТЕ ваш ENTITY_TYPE_ID SPA
+    const PORTAL = 'https://tehprof.bitrix24.kz';
+    // ------------------------------------
 
-    // подтянем SDK сервер-сайд и заинлайнем
+    // 1) читаем POST (PLACEMENT / PLACEMENT_OPTIONS)
+    let placement = null, placementOptions = '';
+    try {
+      if (request.method !== 'GET') {
+        const ct = (request.headers.get('content-type') || '').toLowerCase();
+        if (ct.includes('application/x-www-form-urlencoded') || ct.includes('multipart/form-data')) {
+          const fd = await request.formData();
+          placement        = fd.get('PLACEMENT') || null;
+          placementOptions = fd.get('PLACEMENT_OPTIONS') || '';
+        } else if (ct.includes('application/json')) {
+          const j = await request.json();
+          placement        = j.PLACEMENT || null;
+          placementOptions = j.PLACEMENT_OPTIONS || '';
+        }
+      }
+    } catch (_) {}
+
+    // 2) подтягиваем SDK и заинлайнем
     let sdk = '';
     try { const r = await fetch('https://api.bitrix24.com/api/v1/'); sdk = await r.text(); }
     catch { sdk = "throw new Error('BX24 SDK fetch failed');"; }
 
-    // HTML страницы — возвращаем один и тот же на GET/POST 200
+    // 3) html
     const html = `<!doctype html>
 <html lang="ru"><head>
-<meta charset="utf-8" />
+<meta charset="utf-8">
 <title>Виджет сделки</title>
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   :root { --bg:#f5f7fb; --ink:#111827; --mut:#6b7280; --line:#e5e7eb; --blue:#3b82f6; --green:#059669; --red:#dc2626; }
   body{margin:0;padding:24px;font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--ink)}
@@ -37,10 +52,10 @@ export default {
   .chip{display:inline-flex;gap:6px;align-items:center;padding:4px 8px;background:#f3f4f6;border:1px solid var(--line);border-radius:999px}
   .tiny{font-size:12px}
   .grid2{display:grid;grid-template-columns:auto 1fr;gap:8px 12px;margin-bottom:8px}
-  input[type="text"]{border:1px solid var(--line);border-radius:10px;padding:8px 10px}
 </style>
 </head><body>
   <h1>Виджет сделки</h1>
+
   <div class="grid2 tiny muted">
     <div>Deal ID:</div><div id="dealId">—</div>
     <div>Placement:</div><div id="placement">—</div>
@@ -56,8 +71,7 @@ export default {
   <table id="tbl">
     <thead>
       <tr>
-        <th style="width:72px">ID</th>
-        <th>Название</th>
+        <th style="width:72px">ID</th><th>Название</th>
         <th style="width:160px">Ответственный (ID)</th>
         <th style="width:140px">Стадия</th>
         <th style="width:180px">Адрес</th>
@@ -69,43 +83,82 @@ export default {
     <tbody id="rows"><tr><td colspan="8" class="muted">Загрузка…</td></tr></tbody>
   </table>
 
-  <!-- SDK Bitrix24 (инлайн) -->
+  <!-- передаём снапшот POST -->
+  <script>window.__BOOT__ = ${JSON.stringify({ placement, placementOptions })};</script>
+  <!-- SDK -->
   <script>${sdk}</script>
 
   <script>
-  const CFG = ${JSON.stringify({
-    FIELD: 'UF_CRM_1755533553',
-    TYPE_ID: 196, // ВАЖНО: замените после деплоя!
-  })};
-
+  // ===== helpers =====
   const $ = s => document.querySelector(s);
   const ui = { id:$('#dealId'), plc:$('#placement'), rows:$('#rows'), hint:$('#hint'), add:$('#btnAdd'), ref:$('#btnRefresh') };
+  const A = v => !v ? [] : (Array.isArray(v) ? v : [v]);
+  const J = s => { try{return JSON.parse(s)}catch{return{}} };
+  const bcode=(t,id)=>\`DYNAMIC_\${t}_\${id}\`;
+  const toIdFromBinding=(code,t)=>{ const m=String(code||'').match(/DYNAMIC_(\\d+)_(\\d+)/); return m&&Number(m[1])==Number(t)?Number(m[2]):null; };
+  const COLS={title:'title',stageId:'stageId',assigned:'assignedById',address:'UF_ADDRESS',shipType:'UF_SHIP_METHOD',shipDate:'UF_SHIP_DATE'};
 
-  const normArr = v => !v ? [] : (Array.isArray(v) ? v : [v]);
-  const bindingCode = (typeId,id) => \`DYNAMIC_\${typeId}_\${id}\`;
-  const parseBindingToId = (code,typeId) => {
-    if (typeof code!=='string' || !code.startsWith('DYNAMIC_')) return null;
-    const m = code.match(/DYNAMIC_(\\d+)_(\\d+)/);
-    if (!m) return null;
-    if (Number(m[1]) !== Number(typeId)) return null;
-    return Number(m[2]);
-  };
-  const detectMode = (raw) => {
-    const a = normArr(raw);
-    return a.some(v => typeof v === 'string' && v.startsWith('DYNAMIC_')) ? 'bindings' : 'ids';
-  };
+  // ===== state =====
+  const S={ dealId:null, field:'${DEAL_FIELD_CODE}', typeId:${SMART_ENTITY_TYPE_ID}, mode:'ids', bindings:[], ids:[], items:[] };
 
-  const COLS = { title:'title', stageId:'stageId', assigned:'assignedById', address:'UF_ADDRESS', shipType:'UF_SHIP_METHOD', shipDate:'UF_SHIP_DATE' };
+  // 0) фолбэк из POST: покажем placement и dealId сразу
+  (function fromPost(){
+    const boot = window.__BOOT__||{};
+    if (boot.placement) ui.plc.textContent = boot.placement;
+    const sid = J(boot.placementOptions||'{}').ID || null;
+    if (sid) { ui.id.textContent = sid; S.dealId = Number(sid); }
+  })();
 
-  const state = { dealId:null, mode:'ids', bindings:[], ids:[], items:[] };
+  // 1) старт SDK
+  BX24.init(function(){
+    BX24.placement.info(function(info){
+      ui.plc.textContent = info?.placement || ui.plc.textContent || '—';
+      const id = info?.options?.ID || info?.options?.ENTITY_ID || null;
+      if (id) { S.dealId = Number(id); ui.id.textContent = id; }
+      if (!S.dealId){ ui.rows.innerHTML = '<tr><td colspan="8" class="err">ID is not defined or invalid.</td></tr>'; return; }
+      load(); fit();
+    });
+  });
 
-  function renderRows(){
-    if (!state.items.length){ ui.rows.innerHTML = '<tr><td colspan="8" class="muted">Пока пусто</td></tr>'; return; }
-    ui.rows.innerHTML = '';
-    state.items.forEach(it=>{
-      const tr = document.createElement('tr');
-      const id = it.id;
-      tr.innerHTML = \`
+  function fit(){ try{ BX24 && BX24.resizeWindow(document.documentElement.scrollHeight, 200);}catch(e){} }
+  addEventListener('load',fit); addEventListener('resize',fit); setInterval(fit,900);
+
+  function detectMode(raw){ const a=A(raw); return a.some(v=>typeof v==='string' && v.startsWith('DYNAMIC_'))?'bindings':'ids'; }
+
+  function load(){
+    ui.hint.textContent='Загрузка…';
+    BX24.callMethod('crm.deal.get', {id:S.dealId}, r=>{
+      if(r.error()){ ui.rows.innerHTML='<tr><td colspan="8" class="err">'+r.error_description()+'</td></tr>'; ui.hint.textContent=''; return; }
+      const deal=r.data(); const raw=deal[S.field];
+      S.mode = detectMode(raw);
+      S.bindings = A(raw);
+      S.ids = (S.mode==='bindings')
+        ? S.bindings.map(c=>toIdFromBinding(c,S.typeId)).filter(Boolean)
+        : A(raw).map(Number).filter(Boolean);
+
+      if(!S.ids.length){ ui.rows.innerHTML='<tr><td colspan="8" class="muted">Нет привязок</td></tr>'; ui.hint.textContent=''; return; }
+      fetchItems(S.ids, items=>{ S.items=items; render(); ui.hint.textContent=''; });
+    });
+  }
+
+  function fetchItems(ids, cb){
+    BX24.callMethod('crm.item.list',{
+      entityTypeId:S.typeId, filter:{'@id':ids},
+      select:['id','title','stageId',COLS.assigned,COLS.address,COLS.shipType,COLS.shipDate]
+    }, r=>{
+      if(!r.error()) return cb(r.data().items||[]);
+      const calls={}; ids.forEach((id,i)=>calls['g'+i]=['crm.item.get',{entityTypeId:S.typeId,id}]);
+      BX24.callBatch(calls,res=>{ const arr=[]; for(const k in res){ if(!res[k].error()) arr.push(res[k].data().item); } cb(arr); }, true);
+    });
+  }
+
+  function render(){
+    if(!S.items.length){ ui.rows.innerHTML='<tr><td colspan="8" class="muted">Пусто</td></tr>'; return; }
+    ui.rows.innerHTML='';
+    S.items.forEach(it=>{
+      const id=it.id;
+      const tr=document.createElement('tr');
+      tr.innerHTML=\`
         <td>\${id}</td>
         <td><a class="link" data-open="\${id}">\${it[COLS.title]||('#'+id)}</a></td>
         <td>\${it[COLS.assigned] ?? '—'}</td>
@@ -119,103 +172,52 @@ export default {
         </td>\`;
       ui.rows.appendChild(tr);
     });
-    ui.rows.querySelectorAll('[data-open]').forEach(n=>n.onclick=()=>BX24.openPath(\`/crm/type/\${CFG.TYPE_ID}/details/\${n.getAttribute('data-open')}/\`));
-    ui.rows.querySelectorAll('[data-del]').forEach(n=>n.onclick=()=>detachItem(Number(n.getAttribute('data-del'))));
+    ui.rows.querySelectorAll('[data-open]').forEach(n=>n.onclick=()=>BX24.openPath(\`/crm/type/\${S.typeId}/details/\${n.getAttribute('data-open')}/\`));
+    ui.rows.querySelectorAll('[data-del]').forEach(n=>n.onclick=()=>detach(Number(n.getAttribute('data-del'))));
   }
 
-  function fetchItems(ids, cb){
-    BX24.callMethod('crm.item.list', {
-      entityTypeId: CFG.TYPE_ID, filter: { '@id': ids },
-      select: ['id','title','stageId', COLS.assigned, COLS.address, COLS.shipType, COLS.shipDate]
-    }, r=>{
-      if (!r.error()) return cb(r.data().items||[]);
-      // fallback: батч по get
-      const calls={}; ids.forEach((id,i)=>calls['g'+i]=['crm.item.get',{entityTypeId:CFG.TYPE_ID,id}]);
-      BX24.callBatch(calls, res=>{
-        const arr=[]; for(const k in res){ if(!res[k].error()) arr.push(res[k].data().item); }
-        cb(arr);
-      }, true);
+  function save(next){
+    const f={}; f[S.field]=next;
+    BX24.callMethod('crm.deal.update',{id:S.dealId,fields:f}, r=>{
+      if(r.error()) ui.hint.textContent=r.error_description(); else load();
     });
   }
-
-  function load(){
-    ui.hint.textContent = 'Загрузка…';
-    BX24.callMethod('crm.deal.get', {id: state.dealId}, r=>{
-      if (r.error()){ ui.rows.innerHTML = '<tr><td colspan="8" class="err">'+r.error_description()+'</td></tr>'; ui.hint.textContent=''; return; }
-      const deal = r.data();
-      const raw = deal[CFG.FIELD];
-      state.mode = detectMode(raw);
-      state.bindings = normArr(raw);
-      state.ids = (state.mode==='bindings')
-        ? state.bindings.map(c=>parseBindingToId(c, CFG.TYPE_ID)).filter(Boolean)
-        : normArr(raw).map(v=>Number(v)).filter(Boolean);
-      if (!state.ids.length){ ui.rows.innerHTML = '<tr><td colspan="8" class="muted">Нет привязок</td></tr>'; ui.hint.textContent=''; return; }
-      fetchItems(state.ids, items=>{ state.items = items; renderRows(); ui.hint.textContent=''; });
-    });
-  }
-
-  function saveBindings(nextArray){
-    const fields = {}; fields[CFG.FIELD] = nextArray;
-    BX24.callMethod('crm.deal.update', { id: state.dealId, fields }, r=>{
-      if (r.error()) ui.hint.textContent = r.error_description(); else load();
-    });
-  }
-
   function attach(ids){
-    if (state.mode === 'bindings'){
-      const add = ids.map(id=>bindingCode(CFG.TYPE_ID,id));
-      const uniq = Array.from(new Set([...(state.bindings||[]), ...add]));
-      saveBindings(uniq);
+    if(S.mode==='bindings'){
+      const add=ids.map(id=>bcode(S.typeId,id));
+      save(Array.from(new Set([...(S.bindings||[]),...add])));
     } else {
-      const uniq = Array.from(new Set([...(normArr(state.bindings).map(Number)), ...ids]));
-      saveBindings(uniq);
+      save(Array.from(new Set([...(A(S.bindings).map(Number)),...ids])));
     }
   }
-  function detachItem(id){
-    if (state.mode === 'bindings'){
-      const code = bindingCode(CFG.TYPE_ID,id);
-      const next = (state.bindings||[]).filter(c=>c!==code);
-      saveBindings(next);
+  function detach(id){
+    if(S.mode==='bindings'){
+      const code=bcode(S.typeId,id);
+      save((S.bindings||[]).filter(c=>c!==code));
     } else {
-      const next = normArr(state.bindings).map(Number).filter(v=>v!==id);
-      saveBindings(next);
+      save(A(S.bindings).map(Number).filter(v=>v!==id));
     }
   }
-
-  function fit(){ try{ BX24 && BX24.resizeWindow(document.documentElement.scrollHeight, 200); }catch(e){} }
-
-  // старт
-  BX24.init(function(){
-    BX24.placement.info(function(info){
-      ui.plc.textContent = info?.placement || '—';
-      const id = info?.options?.ID || info?.options?.ENTITY_ID || null;
-      state.dealId = Number(id)||null; ui.id.textContent = state.dealId || '—';
-      if (!state.dealId){ ui.rows.innerHTML = '<tr><td colspan="8" class="err">Нет ID сделки</td></tr>'; return; }
-      load(); fit();
-    });
-  });
 
   ui.ref.onclick = load;
   ui.add.onclick = ()=>{
     const raw = prompt('Введите ID элементов смарт-процесса через запятую');
-    if (!raw) return;
+    if(!raw) return;
     const ids = raw.split(',').map(s=>Number(s.trim())).filter(Boolean);
-    if (ids.length) attach(ids);
+    if(ids.length) attach(ids);
   };
-
-  addEventListener('load',fit); addEventListener('resize',fit); setInterval(fit,900);
   </script>
 </body></html>`;
 
     return new Response(html, {
-      status: 200,
       headers: {
         'content-type': 'text/html; charset=utf-8',
-        // Ничего внешнего не требуется (SDK инлайн), разрешаем только ваш портал
+        // ВАЖНО: вернули 'unsafe-eval' и оставили iframe-только от вашего портала
         'content-security-policy':
           "default-src 'self' data: blob:; " +
-          "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
-          "connect-src *; frame-ancestors " + CONFIG.PORTAL_ORIGIN + " https://*.bitrix24.kz",
+          "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+          "style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src *; " +
+          "frame-ancestors " + PORTAL + " https://*.bitrix24.kz",
         'cache-control': 'no-store'
       }
     });
