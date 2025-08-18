@@ -38,19 +38,23 @@ export default {
   body{margin:0;padding:24px;font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--ink)}
   h1{margin:0 0 12px;font-size:36px;color:#60a5fa;font-weight:800}
   .grid2{display:grid;grid-template-columns:auto 1fr;gap:8px 12px;margin-bottom:8px}
-  .muted{color:var(--mut)} .err{color:var(--red)} .ok{color:var(--green)}
+  .muted{color:var(--mut)} .err{color:var(--red)} .ok{color:var(--green)} .tiny{font-size:12px}
   /* toolbar */
-  .toolbar{display:flex;gap:12px;align-items:center;margin:10px 0 16px}
+  .toolbar{display:flex;gap:12px;align-items:center;margin:10px 0 16px;flex-wrap:wrap}
   .btn{padding:10px 14px;border-radius:10px;border:1px solid var(--line);background:#fff;cursor:pointer;font-weight:700}
   .btn.upper{text-transform:uppercase;letter-spacing:.3px}
   .btn.primary{background:var(--blue);color:#fff;border-color:var(--blue)}
   .pill{padding:2px 8px;border-radius:9999px;background:#eef2ff;color:#4338ca;font-weight:600;font-size:12px}
   /* таблица */
-  .table-wrap{overflow:auto}
-  table{width:100%;border-collapse:separate;border-spacing:0;background:#fff;border:1px solid var(--line);
-        border-radius:14px;overflow:hidden;table-layout:fixed}
+  .table-wrap{
+    max-height:70vh;          /* вертикальный скролл при большом списке */
+    overflow-y:auto;
+    overflow-x:auto;          /* горизонтальный при узких экранах */
+    background:#fff;border:1px solid var(--line);border-radius:14px
+  }
+  table{width:100%;border-collapse:separate;border-spacing:0;background:#fff;table-layout:fixed}
   th,td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:middle;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  th{background:#fafbff;color:#374151;text-align:left;font-weight:700}
+  th{background:#fafbff;color:#374151;text-align:left;font-weight:700;position:sticky;top:0;z-index:1}
   tr:last-child td{border-bottom:none}
   td.wrap{white-space:normal}
   .actions{display:flex;gap:8px}
@@ -93,6 +97,18 @@ export default {
     <button class="btn upper primary" id="btnCreate">Новый элемент</button>
     <button class="btn upper" id="btnPick">Выбрать элемент</button>
     <button class="btn" id="btnRefresh">Обновить</button>
+
+    <span class="tiny muted" style="margin-left:auto">Показывать по:</span>
+    <select id="pageSize" class="btn" style="padding:6px 10px;">
+      <option value="10" selected>10</option>
+      <option value="30">30</option>
+      <option value="50">50</option>
+      <option value="100">100</option>
+    </select>
+    <button class="btn" id="pgPrev">‹</button>
+    <span id="pgInfo" class="tiny muted">1/1</span>
+    <button class="btn" id="pgNext">›</button>
+
     <span class="tiny muted" id="hint"></span>
   </div>
 
@@ -122,7 +138,7 @@ export default {
         <input class="input" id="q" placeholder="Поиск по названию…" />
         <button class="btn" id="btnSearch">Найти</button>
         <button class="btn" id="btnReset">Сброс</button>
-        <span class="right muted tiny" id="pgInfo"></span>
+        <span class="right tiny muted" id="pgInfoPick"></span>
       </div>
       <div class="modal-body">
         <table class="list" id="pickList">
@@ -147,10 +163,11 @@ export default {
   const ui = {
     id:$('#dealId'), plc:$('#placement'), rows:$('#rows'),
     create:$('#btnCreate'), pick:$('#btnPick'), ref:$('#btnRefresh'), hint:$('#hint'),
+    pageSize:$('#pageSize'), pgPrev:$('#pgPrev'), pgNext:$('#pgNext'), pgInfo:$('#pgInfo'),
     // picker
     picker:$('#picker'), q:$('#q'), btnSearch:$('#btnSearch'), btnReset:$('#btnReset'),
     pickRows:$('#pickRows'), pickAll:$('#pickAll'), btnMore:$('#btnMore'),
-    btnClose:$('#btnClose'), btnAttach:$('#btnAttach'), pgInfo:$('#pgInfo')
+    btnClose:$('#btnClose'), btnAttach:$('#btnAttach'), pgInfoPick:$('#pgInfoPick')
   };
   const A = v => !v ? [] : (Array.isArray(v) ? v : [v]);
   const J = s => { try{return JSON.parse(s)}catch{return{} } };
@@ -162,6 +179,8 @@ export default {
 
   const S={ dealId:null, field:'${DEAL_FIELD_CODE}', typeId:${SMART_ENTITY_TYPE_ID}, mode:'ids',
            bindings:[], ids:[], items:[], users:{}, stages:{}, cats:{},
+           // основной пейджер
+           view:{ page:1, size:10 },
            // picker state
            pk:{ page:0, pageSize:50, query:'', totalShown:0, selected:new Set(), loading:false }
   };
@@ -265,9 +284,20 @@ export default {
   }
 
   function render(){
-    if(!S.items.length){ ui.rows.innerHTML='<tr><td colspan="8" class="muted">Пусто</td></tr>'; return; }
+    const total = S.items.length;
+    const pages = Math.max(1, Math.ceil(total / S.view.size));
+    if (S.view.page > pages) S.view.page = pages;
+
+    const start = (S.view.page - 1) * S.view.size;
+    const slice = S.items.slice(start, start + S.view.size);
+
+    if (ui.pgInfo) ui.pgInfo.textContent = S.view.page + '/' + pages;
+    if (ui.pgPrev) ui.pgPrev.disabled = (S.view.page <= 1);
+    if (ui.pgNext) ui.pgNext.disabled = (S.view.page >= pages);
+
+    if(!slice.length){ ui.rows.innerHTML='<tr><td colspan="8" class="muted">Пусто</td></tr>'; return; }
     ui.rows.innerHTML='';
-    S.items.forEach(it=>{
+    slice.forEach(it=>{
       const id=it.id;
       const title = it[COLS.title] || ('#'+id);
       const assName = S.users[Number(it[COLS.assigned])] || (it[COLS.assigned] ? ('ID '+it[COLS.assigned]) : '—');
@@ -317,28 +347,26 @@ export default {
   }
 
   // ==== ПИКЕР ====
-  function openPicker(){ ui.picker.classList.add('open'); S.pk.page=0; S.pk.totalShown=0; S.pk.selected=new Set(); ui.pickAll.checked=false; ui.pgInfo.textContent=''; loadPickerPage(true); }
+  function openPicker(){ ui.picker.classList.add('open'); S.pk.page=0; S.pk.totalShown=0; S.pk.selected=new Set(); ui.pickAll.checked=false; ui.pgInfoPick.textContent=''; loadPickerPage(true); }
   function closePicker(){ ui.picker.classList.remove('open'); }
   function loadPickerPage(reset=false){
     if (S.pk.loading) return; S.pk.loading=true;
     if (reset){ S.pk.page=0; S.pk.totalShown=0; ui.pickRows.innerHTML='<tr><td colspan="3" class="muted">Загрузка…</td></tr>'; }
     const start = S.pk.page * S.pk.pageSize;
-    const filter = S.pk.query ? { '%title': S.pk.query } : {}; // подстрочный поиск по названию
-    BX24.callMethod('crm.item.list',{
-      entityTypeId:S.typeId, filter, order:{'id':'DESC'}, select:['id','title'], start
-    }, r=>{
+    const filter = S.pk.query ? { '%title': S.pk.query } : {};
+    BX24.callMethod('crm.item.list',{ entityTypeId:S.typeId, filter, order:{'id':'DESC'}, select:['id','title'], start }, r=>{
       S.pk.loading=false;
       if (r.error()){ ui.pickRows.innerHTML='<tr><td colspan="3" class="err">'+r.error_description()+'</td></tr>'; return; }
       const items=r.data().items||[];
       if (reset) ui.pickRows.innerHTML='';
-      if (!items.length && reset){ ui.pickRows.innerHTML='<tr><td colspan="3" class="muted">Ничего не найдено</td></tr>'; ui.pgInfo.textContent=''; return; }
+      if (!items.length && reset){ ui.pickRows.innerHTML='<tr><td colspan="3" class="muted">Ничего не найдено</td></tr>'; ui.pgInfoPick.textContent=''; return; }
       items.forEach(it=>{
         const tr=document.createElement('tr');
         tr.innerHTML=\`<td><input type="checkbox" data-id="\${it.id}"></td><td>\${it.id}</td><td>\${it.title||('#'+it.id)}</td>\`;
         ui.pickRows.appendChild(tr);
       });
       S.pk.totalShown += items.length;
-      ui.pgInfo.textContent = 'Показано: '+S.pk.totalShown;
+      ui.pgInfoPick.textContent = 'Показано: '+S.pk.totalShown;
       S.pk.page++;
     });
   }
@@ -361,18 +389,27 @@ export default {
   ui.btnClose.onclick = () => closePicker();
   ui.btnAttach.onclick = () => { const ids = Array.from(S.pk.selected); if (ids.length) attach(ids); closePicker(); };
 
-  // ==== КНОПКИ ВЕРХНЕЙ ПАНЕЛИ ====
+  // ==== КНОПКИ / ПЕЙДЖЕР ====
   ui.ref.onclick = load;
 
   ui.create.onclick = ()=>{
-    // открываем слайдер создания элемента SPA
     BX24.openPath(\`/crm/type/\${S.typeId}/details/0/\`);
     ui.hint.textContent='Сохраните элемент в открывшемся окне и нажмите «Обновить».';
   };
 
-  ui.pick.onclick = ()=>{
-    // если на портале есть родной селектор — можно легко включить, но делаем независимый встроенный пикер:
-    openPicker();
+  ui.pick.onclick = ()=> openPicker();
+
+  if (ui.pageSize) ui.pageSize.onchange = () => {
+    S.view.size = Number(ui.pageSize.value) || 10;
+    S.view.page = 1;
+    render(); fit();
+  };
+  if (ui.pgPrev) ui.pgPrev.onclick = () => {
+    if (S.view.page > 1) { S.view.page--; render(); fit(); }
+  };
+  if (ui.pgNext) ui.pgNext.onclick = () => {
+    const pages = Math.max(1, Math.ceil((S.items||[]).length / S.view.size));
+    if (S.view.page < pages) { S.view.page++; render(); fit(); }
   };
   </script>
 </body></html>`;
