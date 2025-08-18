@@ -34,17 +34,22 @@ export default {
 <title>Виджет сделки</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  :root { --bg:#f5f7fb; --ink:#111827; --mut:#6b7280; --line:#e5e7eb; --blue:#3b82f6; --green:#059669; --red:#dc2626; }
+  :root { --bg:#f5f7fb; --ink:#111827; --mut:#6b7280; --line:#e5e7eb; --blue:#3bc8f5; --blue-h:#3eddff; --blue-a:#12b1e3; --red:#dc2626; }
   body{margin:0;padding:24px;font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--ink)}
   h1{margin:0 0 12px;font-size:36px;color:#60a5fa;font-weight:800}
   .grid2{display:grid;grid-template-columns:auto 1fr;gap:8px 12px;margin-bottom:8px}
-  .muted{color:var(--mut)} .err{color:var(--red)} .ok{color:var(--green)} .tiny{font-size:12px}
+  .muted{color:var(--mut)} .err{color:var(--red)} .tiny{font-size:12px}
+
   /* toolbar */
   .toolbar{display:flex;gap:12px;align-items:center;margin:10px 0 16px;flex-wrap:wrap}
-  .btn{padding:10px 14px;border-radius:10px;border:1px solid var(--line);background:#fff;cursor:pointer;font-weight:700}
+  .btn{padding:10px 14px;border-radius:10px;border:1px solid var(--line);background:#fff;cursor:pointer;font-weight:700;transition:.12s}
   .btn.upper{text-transform:uppercase;letter-spacing:.3px}
-  .btn.primary{background:var(--blue);color:#fff;border-color:var(--blue)}
+  .btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+  .btn.primary:hover{background:var(--blue-h);border-color:var(--blue-h)}
+  .btn.primary:active{background:var(--blue-a);border-color:var(--blue-a)}
   .pill{padding:2px 8px;border-radius:9999px;background:#eef2ff;color:#4338ca;font-weight:600;font-size:12px}
+  .link{color:#3b82f6;cursor:pointer;text-decoration:none}
+
   /* таблица */
   .table-wrap{
     max-height:70vh;          /* вертикальный скролл при большом списке */
@@ -58,18 +63,20 @@ export default {
   tr:last-child td{border-bottom:none}
   td.wrap{white-space:normal}
   .actions{display:flex;gap:8px}
-  .link{color:var(--blue);cursor:pointer;text-decoration:none}
+
   /* ширины колонок */
   th.col-id, td.col-id{width:72px}
   th.col-assignee, td.col-assignee{width:220px}
-  th.col-stage, td.col-stage{width:320px}
+  th.col-stage, td.col-stage{width:360px}
   th.col-ship, td.col-ship{width:180px}
   th.col-date, td.col-date{width:140px}
-  /* стадия: индикатор прогресса + подпись */
+
+  /* стадия: индикатор прогресса + подпись + селект */
   .stage{display:flex;align-items:center;gap:10px}
-  .bar{position:relative;flex:0 0 120px;height:10px;border-radius:999px;background:#edeef3;overflow:hidden}
+  .bar{position:relative;flex:0 0 140px;height:10px;border-radius:999px;background:#edeef3;overflow:hidden}
   .bar>i{position:absolute;left:0;top:0;bottom:0;background:#a5b4fc}
   .stageSel{padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:#fff;margin-left:10px}
+
   /* ===== ПИКЕР (модалка) ===== */
   .modal{position:fixed;inset:0;background:rgba(17,24,39,.5);display:none;align-items:center;justify-content:center;z-index:9999}
   .modal.open{display:flex}
@@ -174,6 +181,18 @@ export default {
   const bcode=(t,id)=>\`DYNAMIC_\${t}_\${id}\`;
   const toIdFromBinding=(code,t)=>{ const m=String(code||'').match(/DYNAMIC_(\\d+)_(\\d+)/); return m&&Number(m[1])==Number(t)?Number(m[2]):null; };
 
+  // безопасный геттер: пытаемся прочитать варианты названия поля с разными регистрами
+  const pick = (obj, ...keys) => {
+    if (!obj) return undefined;
+    for (const k of keys) if (obj[k] !== undefined) return obj[k];
+    // попробуем все в верхнем и нижнем регистре
+    for (const k of keys) {
+      const u = k.toUpperCase(); if (obj[u] !== undefined) return obj[u];
+      const l = k.toLowerCase(); if (obj[l] !== undefined) return obj[l];
+    }
+    return undefined;
+  };
+
   const COLS={title:'title',stageId:'stageId',categoryId:'categoryId',assigned:'assignedById',
               address:'UF_ADDRESS',shipType:'UF_SHIP_METHOD',shipDate:'UF_SHIP_DATE'};
 
@@ -255,20 +274,40 @@ export default {
     // --- пользователи
     const userIds = Array.from(new Set(items.map(i=>Number(i[COLS.assigned])).filter(Boolean)));
     if (userIds.length){
-      const calls={}; userIds.forEach((uid,i)=>calls['u'+i]=['user.get',{ID:uid}]);
+      const calls={}; userIds.forEach((uid,i)=>calls['u'+i]=['user.get',{ID:String(uid)}]);
       await new Promise(res=>BX24.callBatch(calls, r=>{
         for(const k in r){
           if(!r[k].error()){
-            const u=(r[k].data()[0]||{});
-            if(u && u.ID){
-              const name=[u.LAST_NAME,u.NAME,u.SECOND_NAME].filter(Boolean).join(' ') || u.LOGIN || ('ID '+u.ID);
-              S.users[Number(u.ID)] = { name, path: '/company/personal/user/'+u.ID+'/' };
+            const raw = (r[k].data()||[])[0] || {};
+            const id = Number(pick(raw,'ID'));
+            if (id) {
+              const name = [pick(raw,'LAST_NAME'), pick(raw,'NAME'), pick(raw,'SECOND_NAME')].filter(Boolean).join(' ')
+                           || pick(raw,'LOGIN') || ('ID '+id);
+              S.users[id] = { name, path: '/company/personal/user/'+id+'/' };
             }
           }
         }
         res();
       }, true));
+
+      // дополнительный «тихий» fallback для тех, кто не подтянулся батчем
+      const missed = userIds.filter(id => !S.users[id]);
+      for (const uid of missed) {
+        await new Promise(done=>{
+          BX24.callMethod('user.get',{ID:String(uid)}, rr=>{
+            const one = (rr.data()||[])[0] || {};
+            const id = Number(pick(one,'ID'));
+            if (id) {
+              const nm = [pick(one,'LAST_NAME'), pick(one,'NAME'), pick(one,'SECOND_NAME')].filter(Boolean).join(' ')
+                         || pick(one,'LOGIN') || ('ID '+id);
+              S.users[id] = { name:nm, path: '/company/personal/user/'+id+'/' };
+            }
+            done();
+          });
+        });
+      }
     }
+
     // --- стадии (по категориям)
     const cats = Array.from(new Set(items.map(i=>Number(i.categoryId)).filter(Boolean)));
     if (cats.length){
@@ -276,26 +315,36 @@ export default {
       await new Promise(res=>BX24.callBatch(calls, r=>{
         for(const k in r){
           if(!r[k].error()){
-            const list=r[k].data().stages||[];
+            // в разных сборках возвращается по-разному:
+            let data = r[k].data();
+            let list = Array.isArray(data) ? data
+                     : (data && (data.stages || data.STAGES)) || [];
+            // если вдруг вернули объект вида {result: {...}}
+            if (!Array.isArray(list) && data && data.result) {
+              const s = data.result.stages || data.result.STAGES || [];
+              list = s;
+            }
             list.forEach(st=>{
-              S.stages[st.statusId] = { name:st.name, sort:Number(st.sort)||0, categoryId:st.categoryId };
-              if (!S.catStages[st.categoryId]) S.catStages[st.categoryId]=[];
-              S.catStages[st.categoryId].push({ statusId:st.statusId, name:st.name, sort:Number(st.sort)||0 });
+              const statusId  = String(pick(st,'statusId','STATUS_ID'));
+              const name      = String(pick(st,'name','NAME') || statusId);
+              const sort      = Number(pick(st,'sort','SORT') || 0);
+              const categoryId= Number(pick(st,'categoryId','CATEGORY_ID') || 0);
+              if (statusId) {
+                S.stages[statusId] = { name, sort, categoryId };
+                if (!S.catStages[categoryId]) S.catStages[categoryId]=[];
+                S.catStages[categoryId].push({ statusId, name, sort });
+              }
             });
           }
         }
-        // отсортируем внутри категории
+        // отсортируем внутри категории и посчитаем максимум для прогресса
         Object.keys(S.catStages).forEach(cid=>{
           S.catStages[cid].sort((a,b)=>a.sort-b.sort);
+          const max = S.catStages[cid].length ? Math.max(...S.catStages[cid].map(s=>s.sort)) : 100;
+          S.cats[cid] = { maxSort: max || 100 };
         });
         res();
       }, true));
-      // расчёт максимального sort для прогресса
-      cats.forEach(cid=>{
-        const list = (S.catStages[cid]||[]);
-        const max = list.length ? Math.max(...list.map(s=>s.sort)) : 100;
-        S.cats[cid] = { maxSort: max || 100 };
-      });
     }
   }
 
@@ -439,12 +488,10 @@ export default {
 
   // ==== КНОПКИ / ПЕЙДЖЕР ====
   ui.ref.onclick = load;
-
   ui.create.onclick = ()=>{
     BX24.openPath(\`/crm/type/\${S.typeId}/details/0/\`);
     ui.hint.textContent='Сохраните элемент в открывшемся окне и нажмите «Обновить».';
   };
-
   ui.pick.onclick = ()=> openPicker();
 
   if (ui.pageSize) ui.pageSize.onchange = () => {
