@@ -3,7 +3,7 @@ export default {
     // ------------- CONFIG -------------
     const CONFIG = {
       DEAL_FIELD_CODE: 'UF_CRM_1755533553', // ваше поле сделки (множественное)
-      SMART_ENTITY_TYPE_ID: 196,            // <-- УКАЖИТЕ ID вашего смарт-процесса!
+      SMART_ENTITY_TYPE_ID: 1032,            // <-- УКАЖИТЕ ID вашего смарт-процесса!
       PORTAL_ORIGIN: 'https://tehprof.bitrix24.kz', // для frame-ancestors
     };
     // -----------------------------------
