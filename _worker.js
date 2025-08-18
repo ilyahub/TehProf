@@ -34,14 +34,17 @@ export default {
 <title>Виджет сделки</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  :root { --bg:#f5f7fb; --ink:#111827; --mut:#6b7280; --line:#e5e7eb; --blue:#3bc8f5; --blue-h:#3eddff; --blue-a:#12b1e3; --red:#dc2626; }
+  :root{
+    --bg:#f5f7fb; --ink:#111827; --mut:#6b7280; --line:#e5e7eb; --red:#dc2626;
+    --blue:#3bc8f5; --blue-h:#3eddff; --blue-a:#12b1e3;
+  }
   body{margin:0;padding:24px;font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--ink)}
   h1{margin:0 0 12px;font-size:36px;color:#60a5fa;font-weight:800}
   .grid2{display:grid;grid-template-columns:auto 1fr;gap:8px 12px;margin-bottom:8px}
   .muted{color:var(--mut)} .err{color:var(--red)} .tiny{font-size:12px}
 
   /* toolbar */
-  .toolbar{display:flex;gap:12px;align-items:center;margin:10px 0 16px;flex-wrap:wrap}
+  .toolbar{display:flex;gap:12px;align-items:center;margin:10px 0 8px;flex-wrap:wrap}
   .btn{padding:10px 14px;border-radius:10px;border:1px solid var(--line);background:#fff;cursor:pointer;font-weight:700;transition:.12s}
   .btn.upper{text-transform:uppercase;letter-spacing:.3px}
   .btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
@@ -52,32 +55,32 @@ export default {
 
   /* таблица */
   .table-wrap{
-    max-height:70vh;          /* вертикальный скролл при большом списке */
-    overflow-y:auto;
-    overflow-x:auto;          /* горизонтальный при узких экранах */
-    background:#fff;border:1px solid var(--line);border-radius:14px
+    max-height:70vh;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:14px
   }
-  table{width:100%;border-collapse:separate;border-spacing:0;background:#fff;table-layout:fixed}
+  table{width:100%;border-collapse:separate;border-spacing:0;background:#fff;table-layout:auto}
   th,td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:middle;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  th{background:#fafbff;color:#374151;text-align:left;font-weight:700;position:sticky;top:0;z-index:1}
+  th{background:#fafbff;color:#374151;text-align:left;font-weight:700;position:sticky;top:0;z-index:2;cursor:pointer}
+  tr.filters th{background:#fff;position:sticky;top:40px;z-index:2;cursor:default}
   tr:last-child td{border-bottom:none}
-  td.wrap{white-space:normal}
-  .actions{display:flex;gap:8px}
+  td.wrap{white-space:normal} /* перенос строк */
 
-  /* ширины колонок */
+  .actions{display:flex;gap:8px}
   th.col-id, td.col-id{width:72px}
-  th.col-assignee, td.col-assignee{width:220px}
-  th.col-stage, td.col-stage{width:360px}
+  th.col-assignee, td.col-assignee{width:240px}
+  th.col-stage, td.col-stage{width:420px}
   th.col-ship, td.col-ship{width:180px}
   th.col-date, td.col-date{width:140px}
 
-  /* стадия: индикатор прогресса + подпись + селект */
+  /* индикатор стадии */
   .stage{display:flex;align-items:center;gap:10px}
-  .bar{position:relative;flex:0 0 140px;height:10px;border-radius:999px;background:#edeef3;overflow:hidden}
+  .bar{position:relative;flex:0 0 160px;height:10px;border-radius:999px;background:#edeef3;overflow:hidden}
   .bar>i{position:absolute;left:0;top:0;bottom:0;background:#a5b4fc}
   .stageSel{padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:#fff;margin-left:10px}
 
-  /* ===== ПИКЕР (модалка) ===== */
+  /* фильтры */
+  .filter{width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:#fff;font:inherit}
+
+  /* модалка (пикер) */
   .modal{position:fixed;inset:0;background:rgba(17,24,39,.5);display:none;align-items:center;justify-content:center;z-index:9999}
   .modal.open{display:flex}
   .modal-card{width:min(920px,95vw);max-height:85vh;background:#fff;border-radius:16px;border:1px solid var(--line);display:flex;flex-direction:column}
@@ -107,10 +110,7 @@ export default {
 
     <span class="tiny muted" style="margin-left:auto">Показывать по:</span>
     <select id="pageSize" class="btn" style="padding:6px 10px;">
-      <option value="10" selected>10</option>
-      <option value="30">30</option>
-      <option value="50">50</option>
-      <option value="100">100</option>
+      <option value="10" selected>10</option><option value="30">30</option><option value="50">50</option><option value="100">100</option>
     </select>
     <button class="btn" id="pgPrev">‹</button>
     <span id="pgInfo" class="tiny muted">1/1</span>
@@ -122,15 +122,22 @@ export default {
   <div class="table-wrap">
     <table id="tbl">
       <thead>
-        <tr>
-          <th class="col-id">ID</th>
-          <th>Название</th>
-          <th class="col-assignee">Ответственный</th>
-          <th class="col-stage">Стадия</th>
+        <tr class="head">
+          <th class="col-id" data-sort="id">ID</th>
+          <th data-sort="title">Название</th>
+          <th class="col-assignee" data-sort="ass">Ответственный</th>
+          <th class="col-stage" data-sort="stage">Стадия</th>
           <th>Адрес доставки</th>
           <th class="col-ship">Способ доставки</th>
           <th class="col-date">Дата поставки</th>
           <th style="width:160px">Действия</th>
+        </tr>
+        <tr class="filters">
+          <th></th>
+          <th><input class="filter" id="fTitle" placeholder="Фильтр по названию"></th>
+          <th><input class="filter" id="fAss" placeholder="Фильтр по ответственному"></th>
+          <th><input class="filter" id="fStage" placeholder="Фильтр по стадии"></th>
+          <th></th><th></th><th></th><th></th>
         </tr>
       </thead>
       <tbody id="rows"><tr><td colspan="8" class="muted">Загрузка…</td></tr></tbody>
@@ -165,12 +172,14 @@ export default {
   <script>${sdk}</script>
 
   <script>
-  // ===== helpers =====
+  // ===== helpers & state =====
   const $ = s => document.querySelector(s);
   const ui = {
     id:$('#dealId'), plc:$('#placement'), rows:$('#rows'),
     create:$('#btnCreate'), pick:$('#btnPick'), ref:$('#btnRefresh'), hint:$('#hint'),
     pageSize:$('#pageSize'), pgPrev:$('#pgPrev'), pgNext:$('#pgNext'), pgInfo:$('#pgInfo'),
+    // фильтры / сорт
+    fTitle:$('#fTitle'), fAss:$('#fAss'), fStage:$('#fStage'), head:document.querySelector('tr.head'),
     // picker
     picker:$('#picker'), q:$('#q'), btnSearch:$('#btnSearch'), btnReset:$('#btnReset'),
     pickRows:$('#pickRows'), pickAll:$('#pickAll'), btnMore:$('#btnMore'),
@@ -181,27 +190,39 @@ export default {
   const bcode=(t,id)=>\`DYNAMIC_\${t}_\${id}\`;
   const toIdFromBinding=(code,t)=>{ const m=String(code||'').match(/DYNAMIC_(\\d+)_(\\d+)/); return m&&Number(m[1])==Number(t)?Number(m[2]):null; };
 
-  // безопасный геттер: пытаемся прочитать варианты названия поля с разными регистрами
+  // безопасный геттер регистров
   const pick = (obj, ...keys) => {
     if (!obj) return undefined;
     for (const k of keys) if (obj[k] !== undefined) return obj[k];
-    // попробуем все в верхнем и нижнем регистре
     for (const k of keys) {
-      const u = k.toUpperCase(); if (obj[u] !== undefined) return obj[u];
-      const l = k.toLowerCase(); if (obj[l] !== undefined) return obj[l];
+      const u = String(k).toUpperCase(); if (obj[u] !== undefined) return obj[u];
+      const l = String(k).toLowerCase(); if (obj[l] !== undefined) return obj[l];
     }
     return undefined;
+  };
+
+  // разбор полного stageId
+  const parseStage = sid => {
+    const m = String(sid||'').match(/^DT(\\d+)_(\\d+):(.+)$/);
+    return m ? { typeId:Number(m[1]), categoryId:Number(m[2]), statusId:m[3] } : { typeId:null, categoryId:null, statusId:String(sid||'') };
   };
 
   const COLS={title:'title',stageId:'stageId',categoryId:'categoryId',assigned:'assignedById',
               address:'UF_ADDRESS',shipType:'UF_SHIP_METHOD',shipDate:'UF_SHIP_DATE'};
 
-  const S={ dealId:null, field:'${DEAL_FIELD_CODE}', typeId:${SMART_ENTITY_TYPE_ID}, mode:'ids',
-           bindings:[], ids:[], items:[], users:{}, stages:{}, cats:{}, catStages:{},
-           // основной пейджер
-           view:{ page:1, size:10 },
-           // picker state
-           pk:{ page:0, pageSize:50, query:'', totalShown:0, selected:new Set(), loading:false }
+  const S={
+    dealId:null, field:'${DEAL_FIELD_CODE}', typeId:${SMART_ENTITY_TYPE_ID}, mode:'ids',
+    bindings:[], ids:[], items:[], users:{},
+    stagesByFull:{},         // ключ: полный id (DT...:NEW)
+    stagesByCatStatus:{},    // ключ: "categoryId:STATUS"
+    catStages:{},            // по категории: список объектов {id, name, sort, statusId}
+    cats:{},                 // meta по категориям (maxSort)
+    // пагинация + сорт/фильтр
+    view:{ page:1, size:10, sortKey:'id', sortDir:'asc' },
+    filter:{ title:'', ass:'', stage:'' },
+
+    // picker
+    pk:{ page:0, pageSize:50, query:'', totalShown:0, selected:new Set(), loading:false }
   };
 
   // авто-подгон высоты
@@ -289,8 +310,7 @@ export default {
         }
         res();
       }, true));
-
-      // дополнительный «тихий» fallback для тех, кто не подтянулся батчем
+      // fallback точечно
       const missed = userIds.filter(id => !S.users[id]);
       for (const uid of missed) {
         await new Promise(done=>{
@@ -315,29 +335,30 @@ export default {
       await new Promise(res=>BX24.callBatch(calls, r=>{
         for(const k in r){
           if(!r[k].error()){
-            // в разных сборках возвращается по-разному:
             let data = r[k].data();
             let list = Array.isArray(data) ? data
                      : (data && (data.stages || data.STAGES)) || [];
-            // если вдруг вернули объект вида {result: {...}}
             if (!Array.isArray(list) && data && data.result) {
-              const s = data.result.stages || data.result.STAGES || [];
-              list = s;
+              list = data.result.stages || data.result.STAGES || [];
             }
             list.forEach(st=>{
-              const statusId  = String(pick(st,'statusId','STATUS_ID'));
-              const name      = String(pick(st,'name','NAME') || statusId);
-              const sort      = Number(pick(st,'sort','SORT') || 0);
-              const categoryId= Number(pick(st,'categoryId','CATEGORY_ID') || 0);
-              if (statusId) {
-                S.stages[statusId] = { name, sort, categoryId };
-                if (!S.catStages[categoryId]) S.catStages[categoryId]=[];
-                S.catStages[categoryId].push({ statusId, name, sort });
-              }
+              const statusId   = String(pick(st,'statusId','STATUS_ID') || '');
+              const name       = String(pick(st,'name','NAME') || statusId);
+              const sort       = Number(pick(st,'sort','SORT') || 0);
+              const categoryId = Number(pick(st,'categoryId','CATEGORY_ID') || 0);
+              const fullId     = String(pick(st,'id','ID') || (categoryId ? \`DT\${S.typeId}_\${categoryId}:\${statusId}\` : statusId));
+
+              // словари
+              S.stagesByFull[fullId] = { id:fullId, name, sort, categoryId, statusId };
+              const catKey = categoryId + ':' + statusId;
+              S.stagesByCatStatus[catKey] = S.stagesByFull[fullId];
+
+              if (!S.catStages[categoryId]) S.catStages[categoryId]=[];
+              S.catStages[categoryId].push({ id:fullId, name, sort, statusId });
             });
           }
         }
-        // отсортируем внутри категории и посчитаем максимум для прогресса
+        // сортировка и maxSort
         Object.keys(S.catStages).forEach(cid=>{
           S.catStages[cid].sort((a,b)=>a.sort-b.sort);
           const max = S.catStages[cid].length ? Math.max(...S.catStages[cid].map(s=>s.sort)) : 100;
@@ -348,33 +369,77 @@ export default {
     }
   }
 
+  function getStageObject(item){
+    const sid = item[COLS.stageId];
+    const {categoryId, statusId} = parseStage(sid);
+    return S.stagesByFull[sid] || S.stagesByCatStatus[(categoryId+':'+statusId)] || { id:sid, name:sid, sort:0, categoryId };
+  }
+
   function stageUi(item){
-    const sid=item[COLS.stageId]; const cid=Number(item[COLS.categoryId])||0;
-    const st=S.stages[sid]; const name=st?.name || sid || '—';
-    const max=S.cats[cid]?.maxSort||100; const pct = Math.max(0, Math.min(100, Math.round(((st?.sort||0)/max)*100)));
+    const st = getStageObject(item);
+    const cid = Number(item[COLS.categoryId])||st.categoryId||0;
+    const max=S.cats[cid]?.maxSort||100;
+    const pct = Math.max(0, Math.min(100, Math.round(((st.sort||0)/max)*100)));
     const list=S.catStages[cid]||[];
-    const opts=list.map(s=>\`<option value="\${s.statusId}" \${s.statusId===sid?'selected':''}>\${s.name}</option>\`).join('');
+    const opts=list.map(s=>\`<option value="\${s.id}" \${s.id===st.id?'selected':''}>\${s.name}</option>\`).join('');
     return \`
       <div class="stage">
         <div class="bar"><i style="width:\${pct}%"></i></div>
-        <span>\${name}</span>
-        <select class="stageSel" data-item="\${item.id}" data-cur="\${sid}">\${opts}</select>
+        <span>\${st.name}</span>
+        <select class="stageSel" data-item="\${item.id}" data-cur="\${st.id}">\${opts}</select>
       </div>\`;
   }
 
+  // сорт + фильтры
+  function filteredAndSorted(){
+    const t = S.filter.title.trim().toLowerCase();
+    const a = S.filter.ass.trim().toLowerCase();
+    const s = S.filter.stage.trim().toLowerCase();
+
+    let arr = S.items.filter(it=>{
+      const title = String(it[COLS.title]||'').toLowerCase();
+      const uid   = Number(it[COLS.assigned])||null;
+      const ass   = uid && S.users[uid] ? S.users[uid].name.toLowerCase() : '';
+      const st    = getStageObject(it).name.toLowerCase();
+      return (!t || title.includes(t)) && (!a || ass.includes(a)) && (!s || st.includes(s));
+    });
+
+    const dir = S.view.sortDir === 'asc' ? 1 : -1;
+    const key = S.view.sortKey;
+    arr.sort((x,y)=>{
+      const by = k=>{
+        if (k==='id') return (Number(x.id)||0) - (Number(y.id)||0);
+        if (k==='title') return String(x[COLS.title]||'').localeCompare(String(y[COLS.title]||''), 'ru', {sensitivity:'base'});
+        if (k==='ass') {
+          const ax = S.users[Number(x[COLS.assigned])] ?.name || '';
+          const ay = S.users[Number(y[COLS.assigned])] ?.name || '';
+          return ax.localeCompare(ay,'ru',{sensitivity:'base'});
+        }
+        if (k==='stage') return (getStageObject(x).sort||0) - (getStageObject(y).sort||0);
+        return 0;
+      };
+      const v = by(key);
+      return v===0 ? ((Number(x.id)||0) - (Number(y.id)||0))*dir : v*dir;
+    });
+
+    if (dir<0) arr.reverse();
+    return arr;
+  }
+
   function render(){
-    const total = S.items.length;
+    const full = filteredAndSorted();
+    const total = full.length;
     const pages = Math.max(1, Math.ceil(total / S.view.size));
     if (S.view.page > pages) S.view.page = pages;
 
     const start = (S.view.page - 1) * S.view.size;
-    const slice = S.items.slice(start, start + S.view.size);
+    const slice = full.slice(start, start + S.view.size);
 
-    if (ui.pgInfo) ui.pgInfo.textContent = S.view.page + '/' + pages;
-    if (ui.pgPrev) ui.pgPrev.disabled = (S.view.page <= 1);
-    if (ui.pgNext) ui.pgNext.disabled = (S.view.page >= pages);
+    ui.pgInfo.textContent = S.view.page + '/' + pages;
+    ui.pgPrev.disabled = (S.view.page <= 1);
+    ui.pgNext.disabled = (S.view.page >= pages);
 
-    if(!slice.length){ ui.rows.innerHTML='<tr><td colspan="8" class="muted">Пусто</td></tr>'; return; }
+    if(!slice.length){ ui.rows.innerHTML='<tr><td colspan="8" class="muted">Ничего не найдено</td></tr>'; return; }
     ui.rows.innerHTML='';
     slice.forEach(it=>{
       const id=it.id;
@@ -388,7 +453,7 @@ export default {
       const tr=document.createElement('tr');
       tr.innerHTML=\`
         <td class="col-id">\${id}</td>
-        <td><a class="link" data-open="\${id}">\${title}</a></td>
+        <td class="wrap"><a class="link" data-open="\${id}">\${title}</a></td>
         <td class="col-assignee">\${assHtml}</td>
         <td class="col-stage">\${stageUi(it)}</td>
         <td class="wrap">\${addr}</td>
@@ -408,18 +473,18 @@ export default {
     // смена стадии
     ui.rows.querySelectorAll('.stageSel').forEach(sel=>{
       sel.onchange = ()=>{
-        const newStage = sel.value;
-        const itemId   = Number(sel.getAttribute('data-item'));
-        BX24.callMethod('crm.item.update', { entityTypeId:S.typeId, id:itemId, fields:{ stageId:newStage } }, r=>{
+        const newStageId = sel.value;      // полный ID (DT...:NEW)
+        const itemId     = Number(sel.getAttribute('data-item'));
+        BX24.callMethod('crm.item.update', { entityTypeId:S.typeId, id:itemId, fields:{ stageId:newStageId } }, r=>{
           if (r.error()){ alert('Ошибка смены стадии: '+r.error_description()); sel.value = sel.getAttribute('data-cur'); return; }
-          // локально обновим и перерисуем
-          const it = S.items.find(i=>i.id===itemId); if (it){ it[COLS.stageId] = newStage; }
+          const it = S.items.find(i=>i.id===itemId); if (it){ it[COLS.stageId] = newStageId; }
           render();
         });
       };
     });
   }
 
+  // сохранить связку
   function save(next){
     const f={}; f[S.field]=next;
     BX24.callMethod('crm.deal.update',{id:S.dealId,fields:f}, r=>{
@@ -486,26 +551,35 @@ export default {
   ui.btnClose.onclick = () => closePicker();
   ui.btnAttach.onclick = () => { const ids = Array.from(S.pk.selected); if (ids.length) attach(ids); closePicker(); };
 
-  // ==== КНОПКИ / ПЕЙДЖЕР ====
+  // ==== КНОПКИ / ПАГИНАЦИЯ / ФИЛЬТРЫ / СОРТ ====
   ui.ref.onclick = load;
+
   ui.create.onclick = ()=>{
     BX24.openPath(\`/crm/type/\${S.typeId}/details/0/\`);
     ui.hint.textContent='Сохраните элемент в открывшемся окне и нажмите «Обновить».';
   };
+
   ui.pick.onclick = ()=> openPicker();
 
-  if (ui.pageSize) ui.pageSize.onchange = () => {
-    S.view.size = Number(ui.pageSize.value) || 10;
-    S.view.page = 1;
-    render(); fit();
-  };
-  if (ui.pgPrev) ui.pgPrev.onclick = () => {
-    if (S.view.page > 1) { S.view.page--; render(); fit(); }
-  };
-  if (ui.pgNext) ui.pgNext.onclick = () => {
-    const pages = Math.max(1, Math.ceil((S.items||[]).length / S.view.size));
+  ui.pageSize.onchange = () => { S.view.size = Number(ui.pageSize.value) || 10; S.view.page = 1; render(); fit(); };
+  ui.pgPrev.onclick = () => { if (S.view.page > 1) { S.view.page--; render(); fit(); } };
+  ui.pgNext.onclick = () => {
+    const pages = Math.max(1, Math.ceil(filteredAndSorted().length / S.view.size));
     if (S.view.page < pages) { S.view.page++; render(); fit(); }
   };
+
+  // фильтры
+  [ui.fTitle, ui.fAss, ui.fStage].forEach(inp=>inp.addEventListener('input', ()=>{
+    S.filter.title = ui.fTitle.value; S.filter.ass = ui.fAss.value; S.filter.stage = ui.fStage.value;
+    S.view.page=1; render(); fit();
+  }));
+
+  // сорт
+  ui.head.addEventListener('click', (e)=>{
+    const th = e.target.closest('[data-sort]'); if (!th) return;
+    const key = th.dataset.sort; S.view.sortKey===key ? (S.view.sortDir = S.view.sortDir==='asc'?'desc':'asc') : (S.view.sortKey=key,S.view.sortDir='asc');
+    render(); fit();
+  });
   </script>
 </body></html>`;
 
