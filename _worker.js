@@ -1,19 +1,32 @@
 export default {
   async fetch(request) {
-    // Тянем SDK сервер-сайд и вшиваем как inline-скрипт
-    let sdk = "";
+    // 1) Считываем POST, чтобы достать PLACEMENT/PLACEMENT_OPTIONS
+    let post = {};
     try {
-      const r = await fetch("https://api.bitrix24.com/api/v1/");
-      sdk = await r.text();
+      if (request.method !== "GET") {
+        const ct = (request.headers.get("content-type") || "").toLowerCase();
+        if (ct.includes("application/x-www-form-urlencoded") || ct.includes("multipart/form-data")) {
+          const fd = await request.formData();
+          for (const [k, v] of fd.entries()) post[k] = String(v);
+        } else if (ct.includes("application/json")) {
+          post = await request.json();
+        }
+      }
     } catch (e) {
-      sdk = "console.error('BX24 SDK fetch failed:', " + JSON.stringify(String(e)) + ");";
+      post.__post_error = String(e);
     }
 
+    // 2) Подтягиваем SDK сервер-сайд и инлайнем его
+    let sdk = "";
+    try { const r = await fetch("https://api.bitrix24.com/api/v1/"); sdk = await r.text(); }
+    catch (e) { sdk = "console.error('BX24 SDK fetch failed:', " + JSON.stringify(String(e)) + ");"; }
+
+    // 3) Отдаём HTML (GET/POST → 200)
     const html = `<!doctype html>
 <html lang="ru"><head>
-<meta charset="utf-8">
+<meta charset="utf-8" />
 <title>Виджет сделки (Bitrix24)</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <style>
   body{margin:0;padding:24px;font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial;background:#f9fafb}
   h1{margin:0 0 16px;font-size:40px;color:#60a5fa;font-weight:800}
@@ -26,80 +39,58 @@ export default {
   <div class="kv"><b>Placement:</b> <span id="placement">—</span></div>
   <pre id="raw">// Диагностика будет выведена сюда...</pre>
 
-  <!-- Вшитый SDK -->
+  <!-- Вшиваем снапшот POST -->
+  <script>window.__B24_POST__ = ${JSON.stringify(post)};</script>
+  <!-- Вшиваем SDK -->
   <script>${sdk}</script>
 
   <script>
     const ui={dealId:()=>document.getElementById('dealId'),placement:()=>document.getElementById('placement'),raw:()=>document.getElementById('raw')};
-    function log(x){ui.raw().textContent += "\\n" + (Array.isArray(x)?x.join("\\n"):String(x||""));}
+    const log = (x)=>{ ui.raw().textContent += "\\n" + (Array.isArray(x)?x.join("\\n"):String(x||"")); };
+    const J = (s)=>{ try{return JSON.parse(s)}catch{return{}} };
+    const pickId = (o)=> o.ID||o.ENTITY_ID||o.dealId||o.DEAL_ID||(o.DOCUMENT_ID&&/^\\D+_(\\d+)$/.test(o.DOCUMENT_ID)?RegExp.$1:null)||null;
 
-    // Лог всех postMessage от родителя (рукопожатие портала должно прийти сюда)
-    window.addEventListener('message', e => {
-      try{ log(["MSG \u2190", e.origin, typeof e.data==="string"?e.data:JSON.stringify(e.data)]); }catch(_){}
-    });
+    // 0) Отладка: покажем что пришло в POST
+    log(["POST snapshot:", JSON.stringify(window.__B24_POST__, null, 2)]);
 
-    // Общие ошибки
-    window.addEventListener('error',e=>log("❌ JS error: "+(e.message||e)));
-    window.addEventListener('unhandledrejection',e=>log("❌ Promise rejection: "+(e.reason && (e.reason.message||e.reason))));
+    // 1) Попробуем сразу извлечь ID из POST, не дожидаясь SDK
+    (function fromPost(){
+      const p = window.__B24_POST__ || {};
+      if (p.PLACEMENT) ui.placement().textContent = p.PLACEMENT;
+      let id = pickId(J(p.PLACEMENT_OPTIONS||"{}")) || p.ENTITY_ID || p.ID || null;
+      if (id) ui.dealId().textContent = id;
+    })();
 
-    // ENV
-    const inIframe = (()=>{ try{ return top!==self }catch{ return true } })();
-    log(["ENV:","  inIframe: "+inIframe,"  location.hostname: "+location.hostname,""]);
-
-    function J(s){ try{return JSON.parse(s)}catch{return{}} }
-    function getId(o){ return o.ID||o.ENTITY_ID||o.dealId||o.DEAL_ID||(o.DOCUMENT_ID&&/^\\D+_(\\d+)$/.test(o.DOCUMENT_ID)?RegExp.$1:null)||null }
-
-    // Ждем появления BX24
-    (function wait(start=Date.now()){
-      if (typeof BX24 !== "undefined") { log("✅ BX24 найден (inline), init..."); return doInit(); }
-      if (Date.now()-start > 8000) { log("❌ BX24 не появился за 8с (inline)."); return; }
-      setTimeout(()=>wait(start),150);
+    // 2) Дальше — обычный путь через SDK
+    (function waitBx(start=Date.now()){
+      if (typeof BX24!=="undefined"){ log("✅ BX24 inline найден, init..."); return doInit(); }
+      if (Date.now()-start>8000){ log("❌ BX24 не появился за 8с (inline)."); return; }
+      setTimeout(()=>waitBx(start),150);
     })();
 
     function doInit(){
-      let inited=false; const guard=setTimeout(()=>{ if(!inited) log("⏱ BX24.init не ответил >3с — не корректный пласмент?"); },3000);
+      let inited=false; const guard=setTimeout(()=>{ if(!inited) log("⏱ BX24.init не ответил >3с — возможно, это не корректный пласмент."); },3000);
       try{
         BX24.init(function(){
           inited=true; clearTimeout(guard);
           log("✅ BX24.init: OK");
 
           BX24.placement.info(function(info){
-            if(!info||typeof info!=="object"){ log("❌ placement.info пуст/некорректен."); return; }
             log(["placement.info():", JSON.stringify(info,null,2)]);
-            const placement = info.placement || "—";
-            const opts = info.options || {};
-            let dealId = getId(opts);
-
-            if (!dealId) {
-              const raw = BX24.getParam("PLACEMENT_OPTIONS") || "";
-              const alt = J(raw), altId = getId(alt);
-              log(["PLACEMENT_OPTIONS (raw):", raw||"(empty)", altId?("-> Fallback dealId: "+altId):"-> Fallback dealId не найден"]);
-              if (altId) dealId = altId;
-            }
-
+            const placement=info?.placement||"—";
+            const opts=info?.options||{};
             ui.placement().textContent = placement;
-            ui.dealId().textContent = dealId || "не найден";
+            const id = pickId(opts) || pickId(J(BX24.getParam("PLACEMENT_OPTIONS")||"{}"));
+            if (id) ui.dealId().textContent = id;
 
-            BX24.callMethod("app.info", {}, function(r){
-              if (r.error()) { log(["❌ app.info:", r.error()+" — "+r.error_description()]); return; }
-              log("✅ app.info OK — авторизация есть.");
-              if (dealId) {
-                BX24.callMethod("crm.deal.get", {id: dealId}, function(r2){
-                  if (r2.error()) log(["❌ crm.deal.get:", r2.error()+" — "+r2.error_description()]);
-                  else log("✅ crm.deal.get OK — ID валиден.");
-                });
-              } else {
-                log("⚠ dealId не найден — проверьте placement/options.");
-              }
+            BX24.callMethod("app.info",{}, function(r){
+              if (r.error()) log(["❌ app.info:", r.error()+" — "+r.error_description()]);
+              else log("✅ app.info OK");
             });
           });
         });
-      } catch(e) { log(["❌ Исключение при BX24.init:", e && (e.stack||e.message||e)]); }
+      }catch(e){ log(["❌ Исключение при BX24.init:", e && (e.stack||e.message||e)]); }
     }
-
-    // авто-подгон высоты
-    function fit(){ try{ BX24 && BX24.resizeWindow(document.documentElement.scrollHeight, 200);}catch(e){} }
-    addEventListener('load',fit); addEventListener('resize',fit); setInterval(fit,900);
   </script>
 </body></html>`;
 
@@ -107,7 +98,7 @@ export default {
       status: 200,
       headers: {
         "content-type": "text/html; charset=utf-8",
-        // максимально лояльный CSP для SDK
+        // максимально либеральный CSP, чтобы ничто не мешало SDK
         "content-security-policy":
           "default-src 'self' data: blob: https:; " +
           "script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; " +
