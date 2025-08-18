@@ -1,12 +1,12 @@
 export default {
   async fetch(request) {
-    // ========= НАСТРОЙКА =========
-    const DEAL_FIELD_CODE = 'UF_CRM_1755533553';  // ваше множественное поле со связями
-    const SMART_ENTITY_TYPE_ID = 1032;            // <-- ПОДСТАВЬТЕ свой ENTITY_TYPE_ID SPA
+    // ====== НАСТРОЙКА ======
+    const DEAL_FIELD_CODE = 'UF_CRM_1755533553'; // множественное поле в сделке
+    const SMART_ENTITY_TYPE_ID = 1032;           // ваш SPA ENTITY_TYPE_ID
     const PORTAL_ORIGIN = 'https://tehprof.bitrix24.kz';
-    // =============================
+    // =======================
 
-    // 1) Снимем снапшот POST (PLACEMENT / PLACEMENT_OPTIONS) — пригодится для раннего dealId
+    // Снимем POST-снапшот для раннего dealId
     let placement = null, placementOptions = '';
     try {
       if (request.method !== 'GET') {
@@ -23,12 +23,11 @@ export default {
       }
     } catch (_) {}
 
-    // 2) Подтянем SDK и заинлайним
+    // Вшиваем SDK
     let sdk = '';
     try { const r = await fetch('https://api.bitrix24.com/api/v1/'); sdk = await r.text(); }
     catch { sdk = "throw new Error('BX24 SDK fetch failed')"; }
 
-    // 3) Отдадим HTML (одинаковый для GET/POST)
     const html = `<!doctype html>
 <html lang="ru"><head>
 <meta charset="utf-8">
@@ -38,12 +37,14 @@ export default {
   :root { --bg:#f5f7fb; --ink:#111827; --mut:#6b7280; --line:#e5e7eb; --blue:#3b82f6; --green:#059669; --red:#dc2626; }
   body{margin:0;padding:24px;font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--ink)}
   h1{margin:0 0 12px;font-size:36px;color:#60a5fa;font-weight:800}
-  .toolbar{display:flex;gap:8px;align-items:center;margin:6px 0 16px}
-  .btn{padding:8px 12px;border-radius:10px;border:1px solid var(--line);background:#fff;cursor:pointer}
+  .grid2{display:grid;grid-template-columns:auto 1fr;gap:8px 12px;margin-bottom:8px}
+  .muted{color:var(--mut)} .err{color:var(--red)} .ok{color:var(--green)}
+  /* toolbar */
+  .toolbar{display:flex;gap:12px;align-items:center;margin:10px 0 16px}
+  .btn{padding:10px 14px;border-radius:10px;border:1px solid var(--line);background:#fff;cursor:pointer;font-weight:700}
+  .btn.upper{text-transform:uppercase;letter-spacing:.3px}
   .btn.primary{background:var(--blue);color:#fff;border-color:var(--blue)}
   .pill{padding:2px 8px;border-radius:9999px;background:#eef2ff;color:#4338ca;font-weight:600;font-size:12px}
-  .muted{color:var(--mut)} .ok{color:var(--green)} .err{color:var(--red)}
-  .grid2{display:grid;grid-template-columns:auto 1fr;gap:8px 12px;margin-bottom:8px}
   /* таблица */
   .table-wrap{overflow:auto}
   table{width:100%;border-collapse:separate;border-spacing:0;background:#fff;border:1px solid var(--line);
@@ -51,15 +52,19 @@ export default {
   th,td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:middle;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   th{background:#fafbff;color:#374151;text-align:left;font-weight:700}
   tr:last-child td{border-bottom:none}
+  td.wrap{white-space:normal}
   .actions{display:flex;gap:8px}
   .link{color:var(--blue);cursor:pointer;text-decoration:none}
-  .chip{display:inline-block;max-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  td.wrap{white-space:normal}
+  /* ширины колонок */
   th.col-id, td.col-id{width:72px}
-  th.col-assignee, td.col-assignee{width:160px}
-  th.col-stage, td.col-stage{width:140px}
-  th.col-ship, td.col-ship{width:160px}
+  th.col-assignee, td.col-assignee{width:200px}
+  th.col-stage, td.col-stage{width:220px}
+  th.col-ship, td.col-ship{width:180px}
   th.col-date, td.col-date{width:140px}
+  /* стадия: индикатор прогресса + подпись */
+  .stage{display:flex;align-items:center;gap:10px}
+  .bar{position:relative;flex:0 0 120px;height:10px;border-radius:999px;background:#edeef3;overflow:hidden}
+  .bar>i{position:absolute;left:0;top:0;bottom:0;background:#a5b4fc}
 </style>
 </head><body>
   <h1>Виджет сделки</h1>
@@ -71,7 +76,8 @@ export default {
 
   <div class="toolbar">
     <span class="pill">Связанные элементы SPA</span>
-    <button class="btn primary" id="btnAdd">Добавить</button>
+    <button class="btn upper primary" id="btnCreate">Новый элемент</button>
+    <button class="btn upper" id="btnPick">Выбрать элемент</button>
     <button class="btn" id="btnRefresh">Обновить</button>
     <span class="tiny muted" id="hint"></span>
   </div>
@@ -82,11 +88,11 @@ export default {
         <tr>
           <th class="col-id">ID</th>
           <th>Название</th>
-          <th class="col-assignee">Ответственный (ID)</th>
+          <th class="col-assignee">Ответственный</th>
           <th class="col-stage">Стадия</th>
-          <th>Адрес</th>
-          <th class="col-ship">Доставка</th>
-          <th class="col-date">Дата</th>
+          <th>Адрес доставки</th>
+          <th class="col-ship">Способ доставки</th>
+          <th class="col-date">Дата поставки</th>
           <th style="width:160px">Действия</th>
         </tr>
       </thead>
@@ -94,43 +100,34 @@ export default {
     </table>
   </div>
 
-  <!-- снапшот POST -->
   <script>window.__BOOT__ = ${JSON.stringify({ placement, placementOptions })};</script>
-  <!-- SDK -->
   <script>${sdk}</script>
 
   <script>
   // ===== helpers =====
   const $ = s => document.querySelector(s);
-  const ui = { id:$('#dealId'), plc:$('#placement'), rows:$('#rows'), hint:$('#hint'), add:$('#btnAdd'), ref:$('#btnRefresh') };
+  const ui = { id:$('#dealId'), plc:$('#placement'), rows:$('#rows'), hint:$('#hint'),
+               create:$('#btnCreate'), pick:$('#btnPick'), ref:$('#btnRefresh') };
   const A = v => !v ? [] : (Array.isArray(v) ? v : [v]);
   const J = s => { try{return JSON.parse(s)}catch{return{} } };
   const bcode=(t,id)=>\`DYNAMIC_\${t}_\${id}\`;
   const toIdFromBinding=(code,t)=>{ const m=String(code||'').match(/DYNAMIC_(\\d+)_(\\d+)/); return m&&Number(m[1])==Number(t)?Number(m[2]):null; };
-  const COLS={title:'title',stageId:'stageId',assigned:'assignedById',address:'UF_ADDRESS',shipType:'UF_SHIP_METHOD',shipDate:'UF_SHIP_DATE'};
+
+  // поля SPA (подстрой при необходимости)
+  const COLS={title:'title',stageId:'stageId',categoryId:'categoryId',assigned:'assignedById',
+              address:'UF_ADDRESS',shipType:'UF_SHIP_METHOD',shipDate:'UF_SHIP_DATE'};
 
   // ===== state =====
-  const S={ dealId:null, field:'${DEAL_FIELD_CODE}', typeId:${SMART_ENTITY_TYPE_ID}, mode:'ids', bindings:[], ids:[], items:[] };
-  let loadedOnce = false;
+  const S={ dealId:null, field:'${DEAL_FIELD_CODE}', typeId:${SMART_ENTITY_TYPE_ID}, mode:'ids',
+           bindings:[], ids:[], items:[], users:{}, stages:{}, cats:{} };
 
-  // ——— авто-подгон высоты (только высота; ширину в CRM-вкладке Битрикс не меняет) ———
-  const fit = (() => {
-    let raf;
-    return function fit() {
-      if (!window.BX24) return;
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        const h = Math.max(
-          document.body.scrollHeight,
-          document.documentElement.scrollHeight
-        ) + 12;
-        try { BX24.resizeWindow(h); } catch(e){}
-      });
-    };
-  })();
-  new ResizeObserver(() => fit()).observe(document.body);
+  // авто-подгон высоты
+  const fit = (() => { let raf; return function(){ if(!window.BX24) return;
+    cancelAnimationFrame(raf); raf=requestAnimationFrame(()=>{ const h=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight)+12;
+      try{BX24.resizeWindow(h);}catch(e){} }); };})();
+  new ResizeObserver(()=>fit()).observe(document.body);
 
-  // ——— умный старт: берём ID откуда угодно и как можно раньше ———
+  // ранний dealId из POST
   (function fromPost(){
     const boot = window.__BOOT__||{};
     if (boot.placement) ui.plc.textContent = boot.placement;
@@ -139,65 +136,91 @@ export default {
   })();
 
   BX24.init(function(){
-    // 1) сразу попробуем вытащить ID из PLACEMENT_OPTIONS SDK
-    if (!S.dealId) {
-      const p = BX24.getParam('PLACEMENT_OPTIONS');
-      const pid = (J(p||'{}').ID) || null;
-      if (pid) { S.dealId = Number(pid); ui.id.textContent = S.dealId; }
+    if(!S.dealId){
+      const p=BX24.getParam('PLACEMENT_OPTIONS'); const pid=(J(p||'{}').ID)||null;
+      if (pid){ S.dealId=Number(pid); ui.id.textContent=S.dealId; }
     }
-
-    let started = false;
-    function startOnce(){
-      if (started || !S.dealId) return;
-      started = true;
-      load();
-      fit();
-    }
-
-    // 2) параллельно ждём placement.info
+    let started=false;
+    function start(){ if(started||!S.dealId) return; started=true; load(); fit(); }
     BX24.placement.info(function(info){
       ui.plc.textContent = info?.placement || ui.plc.textContent || '—';
       const id = info?.options?.ID || info?.options?.ENTITY_ID || null;
-      if (id && !S.dealId) { S.dealId = Number(id); ui.id.textContent = S.dealId; }
-      startOnce();
+      if (id && !S.dealId){ S.dealId=Number(id); ui.id.textContent=S.dealId; }
+      start();
     });
-
-    // 3) если у нас уже есть dealId (из POST или getParam), не ждём — стартуем через 300мс
-    setTimeout(startOnce, 300);
-
-    // 4) запасной гард — вдруг info не придёт
-    setTimeout(startOnce, 1500);
+    setTimeout(start, 300);
+    setTimeout(start, 1500);
   });
 
-  // ——— основная логика загрузки ———
   function detectMode(raw){ const a=A(raw); return a.some(v=>typeof v==='string' && v.startsWith('DYNAMIC_'))?'bindings':'ids'; }
 
   function load(){
-    if (!S.dealId){ ui.rows.innerHTML = '<tr><td colspan="8" class="err">ID is not defined or invalid.</td></tr>'; return; }
+    if(!S.dealId){ ui.rows.innerHTML='<tr><td colspan="8" class="err">Нет ID сделки</td></tr>'; return; }
     ui.hint.textContent='Загрузка…';
-    BX24.callMethod('crm.deal.get', {id:S.dealId}, r=>{
+    BX24.callMethod('crm.deal.get',{id:S.dealId}, r=>{
       if(r.error()){ ui.rows.innerHTML='<tr><td colspan="8" class="err">'+r.error_description()+'</td></tr>'; ui.hint.textContent=''; return; }
-      const deal=r.data(); const raw=deal[S.field];
+      const raw=r.data()[S.field];
       S.mode = detectMode(raw);
       S.bindings = A(raw);
-      S.ids = (S.mode==='bindings')
-        ? S.bindings.map(c=>toIdFromBinding(c,S.typeId)).filter(Boolean)
-        : A(raw).map(Number).filter(Boolean);
+      S.ids = (S.mode==='bindings') ? S.bindings.map(c=>toIdFromBinding(c,S.typeId)).filter(Boolean)
+                                     : A(raw).map(Number).filter(Boolean);
+      if(!S.ids.length){ ui.rows.innerHTML='<tr><td colspan="8" class="muted">Пока нет связанных элементов</td></tr>'; ui.hint.textContent=''; fit(); return; }
 
-      if(!S.ids.length){ ui.rows.innerHTML='<tr><td colspan="8" class="muted">Нет привязок</td></tr>'; ui.hint.textContent=''; fit(); return; }
-      fetchItems(S.ids, items=>{ S.items=items; render(); ui.hint.textContent=''; loadedOnce = true; fit(); });
+      fetchItems(S.ids, async (items)=>{
+        S.items = items;
+        await buildDictionaries(items);  // пользователи + стадии (имена и порядок)
+        render(); ui.hint.textContent=''; fit();
+      });
     });
   }
 
   function fetchItems(ids, cb){
     BX24.callMethod('crm.item.list',{
       entityTypeId:S.typeId, filter:{'@id':ids},
-      select:['id','title','stageId',COLS.assigned,COLS.address,COLS.shipType,COLS.shipDate]
+      select:['id','title','stageId','categoryId',COLS.assigned,COLS.address,COLS.shipType,COLS.shipDate]
     }, r=>{
       if(!r.error()) return cb(r.data().items||[]);
+      // fallback: батч по get
       const calls={}; ids.forEach((id,i)=>calls['g'+i]=['crm.item.get',{entityTypeId:S.typeId,id}]);
       BX24.callBatch(calls,res=>{ const arr=[]; for(const k in res){ if(!res[k].error()) arr.push(res[k].data().item); } cb(arr); }, true);
     });
+  }
+
+  // подгружаем имена пользователей и названия стадий
+  async function buildDictionaries(items){
+    // ответственные
+    const userIds = Array.from(new Set(items.map(i=>Number(i[COLS.assigned])).filter(Boolean)));
+    if (userIds.length){
+      const calls={}; userIds.forEach((uid,i)=>calls['u'+i]=['user.get',{ID:uid}]);
+      await new Promise(res=>BX24.callBatch(calls, r=>{
+        for(const k in r){ if(!r[k].error()){ const u=(r[k].data()[0]||{}); if(u && u.ID) S.users[Number(u.ID)] = [u.LAST_NAME,u.NAME,u.SECOND_NAME].filter(Boolean).join(' ') || u.LOGIN || ('ID '+u.ID); } }
+        res();
+      }, true));
+    }
+    // стадии (по каждой категории своя последовательность)
+    const cats = Array.from(new Set(items.map(i=>Number(i.categoryId)).filter(Boolean)));
+    if (cats.length){
+      const calls={}; cats.forEach((cid,i)=>calls['s'+i]=['crm.category.stage.list',{entityTypeId:S.typeId,categoryId:cid}]);
+      await new Promise(res=>BX24.callBatch(calls, r=>{
+        for(const k in r){ if(!r[k].error()){ const list=r[k].data().stages||[];
+          list.forEach(st=>{ S.stages[st.statusId] = { name:st.name, sort:Number(st.sort)||0, categoryId:st.categoryId }; });
+        }}
+        res();
+      }, true));
+      // сохраним макс sort по каждой категории для процента
+      cats.forEach(cid=>{
+        const list = Object.values(S.stages).filter(s=>s.categoryId===cid);
+        const max = list.length ? Math.max(...list.map(s=>s.sort)) : 100;
+        S.cats[cid] = { maxSort: max || 100 };
+      });
+    }
+  }
+
+  function stageView(item){
+    const sid=item[COLS.stageId]; const cid=Number(item[COLS.categoryId])||0;
+    const st=S.stages[sid]; const name=st?.name || sid || '—';
+    const max=S.cats[cid]?.maxSort||100; const pct = Math.max(0, Math.min(100, Math.round(((st?.sort||0)/max)*100)));
+    return \`<div class="stage"><div class="bar"><i style="width:\${pct}%"></i></div><span>\${name}</span></div>\`;
   }
 
   function render(){
@@ -205,15 +228,20 @@ export default {
     ui.rows.innerHTML='';
     S.items.forEach(it=>{
       const id=it.id;
+      const title = it[COLS.title] || ('#'+id);
+      const assName = S.users[Number(it[COLS.assigned])] || (it[COLS.assigned] ? ('ID '+it[COLS.assigned]) : '—');
+      const addr = it[COLS.address] ?? '—';
+      const ship = it[COLS.shipType] ?? '—';
+      const date = it[COLS.shipDate] ?? '—';
       const tr=document.createElement('tr');
       tr.innerHTML=\`
         <td class="col-id">\${id}</td>
-        <td><a class="link" data-open="\${id}">\${it[COLS.title]||('#'+id)}</a></td>
-        <td class="col-assignee">\${it[COLS.assigned] ?? '—'}</td>
-        <td class="col-stage"><span class="chip">\${it[COLS.stageId] ?? '—'}</span></td>
-        <td class="wrap">\${it[COLS.address] ?? '—'}</td>
-        <td class="col-ship">\${it[COLS.shipType] ?? '—'}</td>
-        <td class="col-date">\${it[COLS.shipDate] ?? '—'}</td>
+        <td><a class="link" data-open="\${id}">\${title}</a></td>
+        <td class="col-assignee">\${assName}</td>
+        <td class="col-stage">\${stageView(it)}</td>
+        <td class="wrap">\${addr}</td>
+        <td class="col-ship">\${ship}</td>
+        <td class="col-date">\${date}</td>
         <td class="actions">
           <button class="btn" data-open="\${id}">Открыть</button>
           <button class="btn" data-del="\${id}">Удалить</button>
@@ -247,12 +275,38 @@ export default {
     }
   }
 
+  // Кнопки как в списке SPA
   ui.ref.onclick = load;
-  ui.add.onclick = ()=>{
-    const raw = prompt('Введите ID элементов смарт-процесса через запятую');
+
+  ui.create.onclick = ()=>{
+    // открываем слайдер создания элемента SPA
+    BX24.openPath(\`/crm/type/\${S.typeId}/details/0/\`);
+    // Подскажем обновить после сохранения (Bitrix не шлёт нам событие закрытия из другого фрейма)
+    ui.hint.textContent='Сохраните элемент в открывшемся окне и нажмите «Обновить».';
+  };
+
+  ui.pick.onclick = ()=>{
+    // красивый диалог, если доступен
+    if (window.BX && BX.UI && BX.UI.EntitySelector){
+      try{
+        const dlg = new BX.UI.EntitySelector.Dialog({
+          target: ui.pick,
+          entities: [{ id:'dynamic', dynamicLoad:true, entityTypeId:S.typeId }],
+          multiple: true, dropdownMode: true, enableSearch: true, width: 550
+        });
+        dlg.show();
+        dlg.subscribe('onSave', ()=>{
+          const ids = dlg.getSelectedItems().map(i=>Number(i.getId())).filter(Boolean);
+          if (ids.length) attach(ids);
+        });
+        return;
+      }catch(_){}
+    }
+    // фолбэк — ввод ID вручную
+    const raw = prompt('Введите ID элементов смарт-процесса (через запятую)');
     if(!raw) return;
     const ids = raw.split(',').map(s=>Number(s.trim())).filter(Boolean);
-    if(ids.length) attach(ids);
+    if (ids.length) attach(ids);
   };
   </script>
 </body></html>`;
@@ -260,7 +314,6 @@ export default {
     return new Response(html, {
       headers: {
         'content-type': 'text/html; charset=utf-8',
-        // Разрешаем всё нужное SDK, но встраивание — только вашим порталом
         'content-security-policy':
           "default-src 'self' data: blob:; " +
           "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
