@@ -1,1 +1,63 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Виджет сделки (диагностика)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://api.bitrix24.com/api/v1/"></script>
+  <style>
+    body { margin:0; padding:24px; font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial; background:#f9fafb; }
+    h1 { margin:0 0 12px; font-size:42px; color:#60a5fa; font-weight:800; letter-spacing:.5px; }
+    pre { background:#0b1020; color:#d1d5db; padding:12px; border-radius:12px; white-space:pre-wrap; max-height:55vh; overflow:auto; }
+    .kv { margin:8px 0; color:#6b7280; }
+    .kv b { color:#111827; }
+  </style>
+</head>
+<body>
+  <h1>Виджет сделки</h1>
+  <div class="kv"><b>Deal ID:</b> <span id="dealId">—</span></div>
+  <div class="kv"><b>Placement:</b> <span id="placement">—</span></div>
+  <pre id="raw">// Диагностика будет выведена сюда...</pre>
 
+  <script>
+    const ui = {
+      dealId: () => document.getElementById('dealId'),
+      placement: () => document.getElementById('placement'),
+      raw: () => document.getElementById('raw')
+    };
+    function logDiag(lines){ const t = Array.isArray(lines)?lines.join("\n"):String(lines||""); ui.raw().textContent += "\n"+t; }
+    function safeParse(j){ try{return JSON.parse(j)}catch{return{}} }
+    function extractId(o){ return o.ID||o.ENTITY_ID||o.dealId||o.DEAL_ID||(o.DOCUMENT_ID&&/^\D+_(\d+)$/.test(o.DOCUMENT_ID)?RegExp.$1:null)||null }
+
+    const inIframe = (()=>{ try{return top!==self}catch{return true} })();
+    logDiag(["ENV:","  inIframe: "+inIframe,"  location.hostname: "+location.hostname,""]);
+    if (typeof BX24==="undefined"){ logDiag("❌ BX24 SDK не найден"); }
+    else{
+      logDiag("✅ BX24 SDK найден, запускаем init...");
+      BX24.init(function(){
+        logDiag("✅ BX24.init: OK");
+        BX24.placement.info(function(info){
+          logDiag(["placement.info():", JSON.stringify(info,null,2)]);
+          const placement = info?.placement||"—";
+          const options = info?.options||{};
+          let dealId = extractId(options);
+          if(!dealId){
+            const raw = BX24.getParam("PLACEMENT_OPTIONS")||"";
+            const alt = safeParse(raw); const altId = extractId(alt);
+            logDiag(["PLACEMENT_OPTIONS (raw):", raw||"(empty)", altId?("-> Fallback dealId: "+altId):"-> Fallback dealId не найден"]);
+            if(altId) dealId=altId;
+          }
+          ui.placement().textContent = placement;
+          ui.dealId().textContent = dealId || "не найден";
+          if(dealId){
+            BX24.callMethod("crm.deal.get",{id:dealId},function(r){
+              if(r.error()) logDiag(["❌ crm.deal.get:", r.error()+" — "+r.error_description()]);
+              else logDiag("✅ crm.deal.get OK — ID валиден, пласмент рабочий.");
+            });
+          }
+        });
+      });
+    }
+  </script>
+</body>
+</html>
