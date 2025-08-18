@@ -20,16 +20,8 @@ export default {
 <script>
 const ui={dealId:()=>document.getElementById('dealId'),placement:()=>document.getElementById('placement'),raw:()=>document.getElementById('raw')};
 function log(s){ui.raw().textContent += "\\n" + (Array.isArray(s)?s.join("\\n"):String(s||""));}
-
-// 0) динамически подключаем SDK, ловим onload/onerror
-(function loadSdk(){
-  const s=document.createElement('script');
-  s.src="https://api.bitrix24.com/api/v1/";
-  s.async=true;
-  s.onload=function(){ log("✅ BX24 SDK загружен"); start(); };
-  s.onerror=function(){ log("❌ Не удалось загрузить https://api.bitrix24.com/api/v1/ (CSP/блокировка)."); };
-  document.head.appendChild(s);
-})();
+window.addEventListener('error',e=>log(["❌ JS error:", e.message||e, e.filename+":"+e.lineno+":"+e.colno].join(" ")));
+window.addEventListener('unhandledrejection',e=>log("❌ Promise rejection: "+(e.reason&&e.reason.message||e.reason)));
 
 function J(s){try{return JSON.parse(s)}catch{return{}}}
 function getId(o){return o.ID||o.ENTITY_ID||o.dealId||o.DEAL_ID||(o.DOCUMENT_ID&&/^\\D+_(\\d+)$/.test(o.DOCUMENT_ID)?RegExp.$1:null)||null}
@@ -37,23 +29,32 @@ function getId(o){return o.ID||o.ENTITY_ID||o.dealId||o.DEAL_ID||(o.DOCUMENT_ID&
 const inIframe=(()=>{try{return top!==self}catch{return true}})();
 log(["ENV:","  inIframe: "+inIframe,"  location.hostname: "+location.hostname,""]);
 
-function start(){
-  // 1) ждём появления BX24 в окне (перестраховка)
-  let tries=0; const t=setInterval(function(){
-    if(typeof BX24!=="undefined"){ clearInterval(t); log("✅ window.BX24 доступен, делаем init..."); init(); }
-    else if(++tries>40){ clearInterval(t); log("❌ BX24 не появился в window за 6с."); }
+// 0) ДИ НА М И Ч Е С К А Я загрузка SDK + явные логи
+(function loadSdk(){
+  const s=document.createElement('script');
+  s.src="https://api.bitrix24.com/api/v1/";
+  s.async=true;
+  s.onload=function(){ log("✅ SDK загружен, ждем window.BX24..."); waitBx24(); };
+  s.onerror=function(){ log("❌ Не удалось загрузить https://api.bitrix24.com/api/v1/ (блокирует сеть/CSP)."); };
+  document.head.appendChild(s);
+})();
+
+function waitBx24(){
+  let i=0; const h=setInterval(function(){
+    if(typeof BX24!=="undefined"){ clearInterval(h); log("✅ window.BX24 доступен, вызываю init()..."); init(); return; }
+    if(++i>50){ clearInterval(h); log("❌ BX24 так и не появился за ~7.5с."); }
   },150);
 }
 
 function init(){
-  let inited=false; const guard=setTimeout(()=>{ if(!inited) log("⏱ BX24.init не ответил >3с — похоже, это не корректный пласмент."); },3000);
+  let inited=false; const guard=setTimeout(()=>{ if(!inited) log("⏱ BX24.init не ответил >3с — возможно, это не корректный пласмент."); },3000);
   try{
     BX24.init(function(){
       inited=true; clearTimeout(guard);
       log("✅ BX24.init: OK");
 
       BX24.placement.info(function(info){
-        if(!info||typeof info!=="object"){ log("❌ placement.info пуст или некорректен."); return; }
+        if(!info||typeof info!=="object"){ log("❌ placement.info пуст/некорректен."); return; }
         log(["placement.info():", JSON.stringify(info,null,2)]);
 
         const placement=info.placement||"—";
@@ -70,7 +71,6 @@ function init(){
         ui.placement().textContent=placement;
         ui.dealId().textContent=dealId||"не найден";
 
-        // авторизация приложения
         BX24.callMethod("app.info",{},function(r){
           if(r.error()){ log(["❌ app.info:", r.error()+" — "+r.error_description()]); return; }
           log("✅ app.info OK — авторизация есть.");
@@ -88,7 +88,6 @@ function init(){
   }catch(e){ log(["❌ Исключение при BX24.init:", e && (e.stack||e.message||e)]); }
 }
 
-// авто-подгон высоты
 function fit(){ try{ BX24 && BX24.resizeWindow(document.documentElement.scrollHeight, 200);}catch(e){} }
 addEventListener('load',fit); addEventListener('resize',fit); setInterval(fit,900);
 </script>
@@ -96,13 +95,14 @@ addEventListener('load',fit); addEventListener('resize',fit); setInterval(fit,90
     return new Response(html, {
       headers: {
         "content-type": "text/html; charset=utf-8",
-        // ВАЖНО: явно разрешаем SDK в CSP + встраивание порталом
+        // ВАЖНО: разрешаем SDK + ограничиваем встраивание порталом
         "content-security-policy":
           "default-src 'self' https://api.bitrix24.com; " +
           "script-src 'self' 'unsafe-inline' https://api.bitrix24.com; " +
           "connect-src * data: blob:; img-src * data: blob:; style-src 'self' 'unsafe-inline'; " +
           "frame-ancestors https://tehprof.bitrix24.kz https://*.bitrix24.kz",
-        "cache-control": "no-store"
+        "cache-control": "no-store",
+        "x-worker": "pages"
       }
     });
   }
