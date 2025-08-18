@@ -59,5 +59,11 @@
       });
     }
   </script>
+  <script>
+  function fit(){ BX24 && BX24.resizeWindow(document.documentElement.scrollHeight, 200); }
+  window.addEventListener('load', fit);
+  window.addEventListener('resize', fit);
+  setInterval(fit, 800);
+</script>
 </body>
 </html>
