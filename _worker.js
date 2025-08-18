@@ -61,15 +61,15 @@ export default {
   .link{color:var(--blue);cursor:pointer;text-decoration:none}
   /* ширины колонок */
   th.col-id, td.col-id{width:72px}
-  th.col-assignee, td.col-assignee{width:200px}
-  th.col-stage, td.col-stage{width:220px}
+  th.col-assignee, td.col-assignee{width:220px}
+  th.col-stage, td.col-stage{width:320px}
   th.col-ship, td.col-ship{width:180px}
   th.col-date, td.col-date{width:140px}
   /* стадия: индикатор прогресса + подпись */
   .stage{display:flex;align-items:center;gap:10px}
   .bar{position:relative;flex:0 0 120px;height:10px;border-radius:999px;background:#edeef3;overflow:hidden}
   .bar>i{position:absolute;left:0;top:0;bottom:0;background:#a5b4fc}
-
+  .stageSel{padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:#fff;margin-left:10px}
   /* ===== ПИКЕР (модалка) ===== */
   .modal{position:fixed;inset:0;background:rgba(17,24,39,.5);display:none;align-items:center;justify-content:center;z-index:9999}
   .modal.open{display:flex}
@@ -178,7 +178,7 @@ export default {
               address:'UF_ADDRESS',shipType:'UF_SHIP_METHOD',shipDate:'UF_SHIP_DATE'};
 
   const S={ dealId:null, field:'${DEAL_FIELD_CODE}', typeId:${SMART_ENTITY_TYPE_ID}, mode:'ids',
-           bindings:[], ids:[], items:[], users:{}, stages:{}, cats:{},
+           bindings:[], ids:[], items:[], users:{}, stages:{}, cats:{}, catStages:{},
            // основной пейджер
            view:{ page:1, size:10 },
            // picker state
@@ -252,35 +252,65 @@ export default {
 
   // словари: пользователи и стадии
   async function buildDictionaries(items){
+    // --- пользователи
     const userIds = Array.from(new Set(items.map(i=>Number(i[COLS.assigned])).filter(Boolean)));
     if (userIds.length){
       const calls={}; userIds.forEach((uid,i)=>calls['u'+i]=['user.get',{ID:uid}]);
       await new Promise(res=>BX24.callBatch(calls, r=>{
-        for(const k in r){ if(!r[k].error()){ const u=(r[k].data()[0]||{}); if(u && u.ID) S.users[Number(u.ID)] = [u.LAST_NAME,u.NAME,u.SECOND_NAME].filter(Boolean).join(' ') || u.LOGIN || ('ID '+u.ID); } }
+        for(const k in r){
+          if(!r[k].error()){
+            const u=(r[k].data()[0]||{});
+            if(u && u.ID){
+              const name=[u.LAST_NAME,u.NAME,u.SECOND_NAME].filter(Boolean).join(' ') || u.LOGIN || ('ID '+u.ID);
+              S.users[Number(u.ID)] = { name, path: '/company/personal/user/'+u.ID+'/' };
+            }
+          }
+        }
         res();
       }, true));
     }
+    // --- стадии (по категориям)
     const cats = Array.from(new Set(items.map(i=>Number(i.categoryId)).filter(Boolean)));
     if (cats.length){
       const calls={}; cats.forEach((cid,i)=>calls['s'+i]=['crm.category.stage.list',{entityTypeId:S.typeId,categoryId:cid}]);
       await new Promise(res=>BX24.callBatch(calls, r=>{
-        for(const k in r){ if(!r[k].error()){ const list=r[k].data().stages||[];
-          list.forEach(st=>{ S.stages[st.statusId] = { name:st.name, sort:Number(st.sort)||0, categoryId:st.categoryId }; });
-        }} res();
+        for(const k in r){
+          if(!r[k].error()){
+            const list=r[k].data().stages||[];
+            list.forEach(st=>{
+              S.stages[st.statusId] = { name:st.name, sort:Number(st.sort)||0, categoryId:st.categoryId };
+              if (!S.catStages[st.categoryId]) S.catStages[st.categoryId]=[];
+              S.catStages[st.categoryId].push({ statusId:st.statusId, name:st.name, sort:Number(st.sort)||0 });
+            });
+          }
+        }
+        // отсортируем внутри категории
+        Object.keys(S.catStages).forEach(cid=>{
+          S.catStages[cid].sort((a,b)=>a.sort-b.sort);
+        });
+        res();
       }, true));
+      // расчёт максимального sort для прогресса
       cats.forEach(cid=>{
-        const list = Object.values(S.stages).filter(s=>s.categoryId===cid);
+        const list = (S.catStages[cid]||[]);
         const max = list.length ? Math.max(...list.map(s=>s.sort)) : 100;
         S.cats[cid] = { maxSort: max || 100 };
       });
     }
   }
 
-  function stageView(item){
+  function stageUi(item){
     const sid=item[COLS.stageId]; const cid=Number(item[COLS.categoryId])||0;
     const st=S.stages[sid]; const name=st?.name || sid || '—';
     const max=S.cats[cid]?.maxSort||100; const pct = Math.max(0, Math.min(100, Math.round(((st?.sort||0)/max)*100)));
-    return \`<div class="stage"><div class="bar"><i style="width:\${pct}%"></i></div><span>\${name}</span></div>\`;
+    const list=S.catStages[cid]||[];
+    const opts=list.map(s=>\`<option value="\${s.statusId}" \${s.statusId===sid?'selected':''}>\${s.name}</option>\`).join('');
+    return \`
+      <div class="stage">
+        <div class="bar"><i style="width:\${pct}%"></i></div>
+        <span>\${name}</span>
+        <select class="stageSel" data-item="\${item.id}" data-cur="\${sid}">\${opts}</select>
+      </div>\`;
   }
 
   function render(){
@@ -300,7 +330,9 @@ export default {
     slice.forEach(it=>{
       const id=it.id;
       const title = it[COLS.title] || ('#'+id);
-      const assName = S.users[Number(it[COLS.assigned])] || (it[COLS.assigned] ? ('ID '+it[COLS.assigned]) : '—');
+      const uid = Number(it[COLS.assigned]) || null;
+      const u = uid ? S.users[uid] : null;
+      const assHtml = u ? \`<a class="link user" data-user="\${uid}">\${u.name}</a>\` : (uid ? ('ID '+uid) : '—');
       const addr = it[COLS.address] ?? '—';
       const ship = it[COLS.shipType] ?? '—';
       const date = it[COLS.shipDate] ?? '—';
@@ -308,8 +340,8 @@ export default {
       tr.innerHTML=\`
         <td class="col-id">\${id}</td>
         <td><a class="link" data-open="\${id}">\${title}</a></td>
-        <td class="col-assignee">\${assName}</td>
-        <td class="col-stage">\${stageView(it)}</td>
+        <td class="col-assignee">\${assHtml}</td>
+        <td class="col-stage">\${stageUi(it)}</td>
         <td class="wrap">\${addr}</td>
         <td class="col-ship">\${ship}</td>
         <td class="col-date">\${date}</td>
@@ -319,8 +351,24 @@ export default {
         </td>\`;
       ui.rows.appendChild(tr);
     });
+
+    // переход по элементу
     ui.rows.querySelectorAll('[data-open]').forEach(n=>n.onclick=()=>BX24.openPath(\`/crm/type/\${S.typeId}/details/\${n.getAttribute('data-open')}/\`));
-    ui.rows.querySelectorAll('[data-del]').forEach(n=>n.onclick=()=>detach(Number(n.getAttribute('data-del'))));
+    // ссылка на пользователя
+    ui.rows.querySelectorAll('a.user').forEach(a=>a.onclick=()=>BX24.openPath('/company/personal/user/'+a.dataset.user+'/'));
+    // смена стадии
+    ui.rows.querySelectorAll('.stageSel').forEach(sel=>{
+      sel.onchange = ()=>{
+        const newStage = sel.value;
+        const itemId   = Number(sel.getAttribute('data-item'));
+        BX24.callMethod('crm.item.update', { entityTypeId:S.typeId, id:itemId, fields:{ stageId:newStage } }, r=>{
+          if (r.error()){ alert('Ошибка смены стадии: '+r.error_description()); sel.value = sel.getAttribute('data-cur'); return; }
+          // локально обновим и перерисуем
+          const it = S.items.find(i=>i.id===itemId); if (it){ it[COLS.stageId] = newStage; }
+          render();
+        });
+      };
+    });
   }
 
   function save(next){
