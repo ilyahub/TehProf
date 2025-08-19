@@ -251,26 +251,50 @@ function bCall(method, params){
   });
 }
 
-async function loadStages(){
-  const res = await bCall('crm.category.stage.list',{ entityTypeId: ENTITY_TYPE_ID });
-  res.forEach(st=>{
-    S.stageMap.set(st.statusId||st.STATUS_ID, {
-      ID: st.statusId||st.STATUS_ID,
-      NAME: st.name||st.NAME,
-      CATEGORY_ID: st.categoryId||st.CATEGORY_ID,
-      SORT: Number(st.sort||st.SORT||0)
-    });
-  });
-  const byCat = new Map();
-  res.forEach(st=>{
-    const cat = st.categoryId||st.CATEGORY_ID;
-    const id  = st.statusId||st.STATUS_ID;
-    if(!byCat.has(cat)) byCat.set(cat,[]);
-    byCat.get(cat).push(id);
-  });
-  for(const [cat, arr] of byCat.entries()){
-    arr.sort((a,b)=>(S.stageMap.get(a)?.SORT||0)-(S.stageMap.get(b)?.SORT||0));
-    S.stageOrderByCat.set(cat, arr);
+async function loadStages() {
+  S.stageMap.clear();
+  S.stageOrderByCat.clear();
+
+  // 1) Список категорий смарт-процесса
+  let cats = [];
+  try {
+    const res = await bCall('crm.item.category.list', { entityTypeId: ENTITY_TYPE_ID });
+    // на разных порталах структура может отличаться
+    cats = (res?.categories || res || []).map(c => ({
+      ID: Number(c.id ?? c.ID ?? 0),
+      NAME: c.name ?? c.NAME ?? ''
+    }));
+  } catch (e) {
+    // если категорий получить не удалось — считаем, что есть одна "0"
+    cats = [{ ID: 0, NAME: 'По умолчанию' }];
+  }
+
+  // 2) Для каждой категории берём статусы через crm.status.list
+  for (const cat of cats) {
+    const entityId = `DT${ENTITY_TYPE_ID}_${cat.ID}`;
+    let statuses = [];
+    try {
+      statuses = await bCall('crm.status.list', {
+        filter: { ENTITY_ID: entityId },
+        order: { SORT: 'ASC' }
+      });
+    } catch (e) {
+      // если статусы получить не удалось — просто пропускаем категорию
+      continue;
+    }
+
+    const order = [];
+    for (const st of (statuses || [])) {
+      const id   = (st.STATUS_ID || st.STATUS_ID || st.ID || '').toString();
+      const name = st.NAME || st.TITLE || id;
+      const sort = Number(st.SORT || 0);
+      if (!id) continue;
+
+      S.stageMap.set(id, { ID: id, NAME: name, CATEGORY_ID: cat.ID, SORT: sort });
+      order.push(id);
+    }
+    order.sort((a, b) => (S.stageMap.get(a)?.SORT || 0) - (S.stageMap.get(b)?.SORT || 0));
+    S.stageOrderByCat.set(cat.ID, order);
   }
 }
 
