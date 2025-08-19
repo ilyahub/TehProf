@@ -1,200 +1,147 @@
 // assets/app/api.js
-// Обёртки над BX24 + утилиты для main.js
 
+// ===== Обёртки над BX24 =====
 export const bx = {
   call(method, params = {}) {
-    return new Promise(resolve => BX24.callMethod(method, params, r => resolve(r)));
+    return new Promise(resolve => BX24.callMethod(method, params, res => resolve(res)));
   },
   batch(calls) {
     return new Promise(resolve => BX24.callBatch(calls, resolve, true));
   }
 };
 
-// ---------- БАЗОВЫЕ ВСПОМОГАТЕЛЬНЫЕ ----------
-
-// Надёжно достаём ID из биндингов вида "DYNAMIC_1032_123" или просто числа
-function normalizeId(v, smartTypeId) {
-  if (v == null || v === '') return null;
-  if (typeof v === 'number') return v || null;
-  const s = String(v);
-  const m = s.match(/^DYNAMIC_(\d+)_(\d+)$/);
-  if (m && Number(m[1]) === Number(smartTypeId)) return Number(m[2]);
-  if (!Number.isNaN(Number(s))) return Number(s);
-  return null;
+// ===== Базовые хелперы (оставляем, как у вас) =====
+export async function getDeal(id) {
+  const r = await bx.call('crm.deal.get', { id });
+  return r.error() ? null : r.data();
 }
 
-// ----- заменить эту функцию в assets/app/api.js -----
-
-// Нормализация ID (число или биндинг "DYNAMIC_<typeId>_<id>")
-function normalizeId(v, smartTypeId) {
-  if (v == null || v === '') return null;
-  if (typeof v === 'number') return v || null;
-  const s = String(v);
-  const m = s.match(/^DYNAMIC_(\d+)_(\d+)$/);
-  if (m && Number(m[1]) === Number(smartTypeId)) return Number(m[2]);
-  if (!Number.isNaN(Number(s))) return Number(s);
-  return null;
+export async function getItemsByIds(entityTypeId, ids, select) {
+  const r = await bx.call('crm.item.list', { entityTypeId, filter: { '@id': ids }, select });
+  if (r.error()) return [];
+  return (r.data().items || []);
 }
 
-import { A } from './utils.js';
+export async function getItem(entityTypeId, id) {
+  const r = await bx.call('crm.item.get', { entityTypeId, id });
+  return r.error() ? null : (r.data().item || null);
+}
 
-// …ваши bx.call / getDeal и прочее остаются как есть …
+export async function listUserFields(entityTypeId) {
+  const r = await bx.call('crm.item.userfield.list', { entityTypeId });
+  if (r.error()) return [];
+  return r.data().userFields || r.data() || [];
+}
 
-/**
- * Достаёт ID связанных смарт-элементов из сделки.
- * 1) Пытается прочитать из конкретного UF-поля (fieldCode).
- * 2) Если не нашли — сканирует все поля сделки.
- * Понимает форматы:
- *  - число / массив чисел
- *  - строка с числами ("12, 13;14 15")
- *  - JSON-массив/объекты [{id:123},{ID:124}] или bindings
- *  - строки вида "DYNAMIC_1032_123"
- */
-export async function getLinkedItemIds(dealId, fieldCode /* string | null */, smartTypeId) {
+export async function updateItemStage(entityTypeId, id, stageId) {
+  const r = await bx.call('crm.item.update', { entityTypeId, id, fields: { stageId } });
+  return !r.error();
+}
+
+export async function listUsers(ids /* number[] */) {
+  const calls = {};
+  ids.forEach((uid, i) => calls['u' + i] = ['user.get', { ID: String(uid) }]);
+  const res = await bx.batch(calls);
+  const map = {};
+  for (const k in res) {
+    if (!res[k].error()) {
+      const raw = (res[k].data() || [])[0] || {};
+      const id = Number(raw.ID || raw.id);
+      if (id) map[id] = raw;
+    }
+  }
+  return map;
+}
+
+export async function listCategoryStages(entityTypeId, categoryIds /* number[] */) {
+  const calls = {};
+  categoryIds.forEach((cid, i) => calls['s' + i] = ['crm.category.stage.list', { entityTypeId, categoryId: cid }]);
+  const res = await bx.batch(calls);
+  const rows = [];
+  for (const k in res) if (!res[k].error()) rows.push(res[k].data());
+  return rows;
+}
+
+// ===== ДОБАВЛЕНО: сбор ID связанных элементов из сделки =====
+// Поддерживает:
+//  - поле-связку типа CRM (массив вида "DYNAMIC_1032_123")
+//  - массив объектов {ENTITY_TYPE_ID, ENTITY_ID}
+//  - массив/строку с голыми числами ID
+export async function getLinkedItemIds(dealId, bindingFieldCode, smartTypeId) {
   const deal = await getDeal(dealId);
   if (!deal) return [];
 
-  const ids = new Set();
+  // Пытаемся достать поле по разным регистрациям
+  const v =
+    deal[bindingFieldCode] ??
+    deal[bindingFieldCode.toUpperCase?.()] ??
+    deal[bindingFieldCode.toLowerCase?.()];
 
-  // 1) попробовать строгое поле (в 3 регистрах на всякий случай)
-  if (fieldCode) {
-    const candidates = [
-      deal[fieldCode],
-      deal[String(fieldCode).toUpperCase()],
-      deal[String(fieldCode).toLowerCase()],
-    ];
-    for (const val of candidates) parseAny(val, smartTypeId, ids);
-  }
+  if (!v) return [];
 
-  // 2) если ничего не нашли — обойти все поля сделки (надёжный фолбэк)
-  if (ids.size === 0) {
-    for (const k in deal) parseAny(deal[k], smartTypeId, ids);
-  }
+  const raw = Array.isArray(v) ? v : String(v).split(/[,;\s]+/).filter(Boolean);
+  const ids = [];
 
-  return Array.from(ids);
-}
-
-// ==== helpers ===============================================================
-
-function parseAny(val, smartTypeId, out /* Set */) {
-  if (val == null || val === '') return;
-
-  // Число
-  if (typeof val === 'number' && val > 0) {
-    out.add(val);
-    return;
-  }
-
-  // Строка
-  if (typeof val === 'string') {
-    const s = val.trim();
-    if (!s) return;
-
-    // JSON?
-    if ((s.startsWith('[') && s.endsWith(']')) || (s.startsWith('{') && s.endsWith('}'))) {
-      try {
-        const j = JSON.parse(s);
-        parseAny(j, smartTypeId, out);
-        return;
-      } catch { /* ignore */ }
+  for (const it of raw) {
+    // DYNAMIC_1032_123
+    const m = String(it).match(/^DYNAMIC_(\d+)_(\d+)$/);
+    if (m && Number(m[1]) === Number(smartTypeId)) {
+      ids.push(Number(m[2]));
+      continue;
     }
-
-    // "DYNAMIC_1032_123" или просто «123, 124»
-    const parts = s.split(/[\s,;]+/).filter(Boolean);
-    for (const p of parts) {
-      const m = p.match(/^DYNAMIC_(\d+)_(\d+)$/i);
-      if (m) {
-        if (Number(m[1]) === Number(smartTypeId)) out.add(Number(m[2]));
+    // объект { ENTITY_TYPE_ID, ENTITY_ID }
+    if (it && typeof it === 'object') {
+      if (Number(it.ENTITY_TYPE_ID) === Number(smartTypeId) && it.ENTITY_ID) {
+        ids.push(Number(it.ENTITY_ID));
         continue;
       }
-      const n = Number(p.replace(/[^\d]/g, ''));
-      if (n > 0) out.add(n);
     }
-    return;
-  }
-
-  // Массив
-  if (Array.isArray(val)) {
-    for (const x of val) parseAny(x, smartTypeId, out);
-    return;
-  }
-
-  // Объект: {id:123} / {ID:123} / {entityTypeId, id} / {bindings:[...]}
-  if (typeof val === 'object') {
-    // bindings как в некоторых UF
-    if (Array.isArray(val.bindings)) {
-      for (const b of val.bindings) {
-        const et = b.entityTypeId ?? b.ENTITY_TYPE_ID;
-        const id = b.id ?? b.ID;
-        if (Number(et) === Number(smartTypeId) && Number(id) > 0) out.add(Number(id));
-      }
-      return;
-    }
-
-    // одиночные варианты
-    const id1 = val.id ?? val.ID ?? val.value ?? val.VALUE;
-    const et1 = val.entityTypeId ?? val.ENTITY_TYPE_ID;
-    if (id1 != null) {
-      if (et1 == null || Number(et1) === Number(smartTypeId)) {
-        const n = Number(String(id1).replace(/[^\d]/g, ''));
-        if (n > 0) out.add(n);
-      }
+    // просто число
+    if (/^\d+$/.test(String(it))) {
+      ids.push(Number(it));
     }
   }
+
+  return Array.from(new Set(ids));
 }
 
-
-
-/**
- * Строим select для crm.item.list (поля, которые реально нужны в таблице)
- * F — карта UF-полей из config.js
- */
-export function buildSelect(F) {
-  return [
-    'id',
-    'title',
-    'assignedById',
-    'stageId',
-    // оба регистра на всякий случай
-    F.key, F.key?.toUpperCase(),
-    F.url, F.url?.toUpperCase(),
-    F.tariff, F.tariff?.toUpperCase(),
-    F.tEnd, F.tEnd?.toUpperCase(),
-    F.mEnd, F.mEnd?.toUpperCase(),
-    F.product, F.product?.toUpperCase(),
-  ].filter(Boolean);
-}
-
-/**
- * Надёжная загрузка элементов по ID:
- * 1) пытаемся одной командой через crm.item.list c фильтром "@id"
- * 2) если пусто/ошибка — делаем batch crm.item.get по каждому id
- */
+// ===== ДОБАВЛЕНО: безопасная выборка элементов по списку ID =====
 export async function robustGetItemsByIds(entityTypeId, ids, select) {
-  if (!ids.length) return [];
+  if (!ids?.length) return [];
 
-  // Попытка №1 — списком
-  const r1 = await bx.call('crm.item.list', {
-    entityTypeId,
-    filter: { '@id': ids },
-    select
-  });
+  // 1) Пробуем обычным list по '@id'
+  const viaList = await getItemsByIds(entityTypeId, ids, select);
+  if (viaList?.length) return viaList;
 
-  if (!r1.error()) {
-    const items = r1.data()?.items || [];
-    if (items.length) return items;
-  }
-
-  // Попытка №2 — батчем
+  // 2) Фоллбэк: батчем по get
   const calls = {};
-  ids.forEach((id, i) => (calls['it' + i] = ['crm.item.get', { entityTypeId, id }]));
+  ids.forEach((id, i) => calls['g' + i] = ['crm.item.get', { entityTypeId, id }]);
   const res = await bx.batch(calls);
-  const arr = [];
+
+  const items = [];
   for (const k in res) {
     if (!res[k].error()) {
-      const it = res[k].data()?.item;
-      if (it) arr.push(it);
+      const itm = res[k].data()?.item;
+      if (itm) items.push(itm);
     }
   }
-  return arr;
+  return items;
+}
+
+// ===== ДОБАВЛЕНО: набор полей, которые реально нужны в таблице =====
+// (добавьте сюда ваши UF, если нужно)
+export function buildSelect() {
+  // Базовые поля динамики + стандартные "шапки"
+  return [
+    'id', 'title', 'assignedById', 'stageId', 'categoryId',
+    'createdTime', 'updatedTime',
+    // ваши UF, если используете:
+    // 'ufCrm10_1717328665682', // ID исходной сделки
+    // 'ufCrm10_1717328730625', // Ключ
+    // 'ufCrm10_1717328814784', // Портал
+    // 'ufCrm10_1717329015552', // Тариф (enum)
+    // 'ufCrm10_1717329087589', // Окончание тарифа
+    // 'ufCrm10_1717329109963', // Окончание подписки
+    // 'ufCrm10_1717329453779', // Продукт (enum)
+  ];
 }
