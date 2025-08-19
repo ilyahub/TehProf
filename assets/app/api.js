@@ -23,41 +23,70 @@ function normalizeId(v, smartTypeId) {
   return null;
 }
 
-// ---------- ТО, ЧТО НУЖНО main.js ----------
+// ----- заменить эту функцию в assets/app/api.js -----
+
+// Нормализация ID (число или биндинг "DYNAMIC_<typeId>_<id>")
+function normalizeId(v, smartTypeId) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'number') return v || null;
+  const s = String(v);
+  const m = s.match(/^DYNAMIC_(\d+)_(\d+)$/);
+  if (m && Number(m[1]) === Number(smartTypeId)) return Number(m[2]);
+  if (!Number.isNaN(Number(s))) return Number(s);
+  return null;
+}
 
 /**
- * Получаем ID связанных элементов из сделки.
- * Поддерживает: массив/строку/числа, а также биндинги DYNAMIC_1032_*
+ * Возвращает ID связанных смарт-элементов (typeId) для сделки.
+ * Ничего не знаем о коде поля — просто сканируем все поля сделки и вытягиваем
+ * все встреченные значения вида DYNAMIC_<typeId>_<id> или голые числа.
+ *
+ * @param {number} dealId
+ * @param {null|undefined|string} _fieldCode  // игнорируется (оставлен для совместимости)
+ * @param {number} smartTypeId
+ * @return {Promise<number[]>}
  */
-export async function getLinkedItemIds(dealId, fieldCode, smartTypeId) {
+export async function getLinkedItemIds(dealId, _fieldCode, smartTypeId) {
   const r = await bx.call('crm.deal.get', { id: dealId });
   if (r.error()) return [];
 
-  const deal = r.data();
-  let raw = deal?.[fieldCode] ?? deal?.[fieldCode.toUpperCase()] ?? deal?.[fieldCode.toLowerCase()];
+  const deal = r.data() || {};
   const out = new Set();
 
-  if (raw == null) return [];
-
-  if (Array.isArray(raw)) {
-    raw.forEach(v => {
-      const id = normalizeId(v, smartTypeId);
+  const collect = (val) => {
+    if (val == null) return;
+    if (Array.isArray(val)) {
+      val.forEach(collect);
+      return;
+    }
+    if (typeof val === 'number') {
+      const id = normalizeId(val, smartTypeId);
       if (id) out.add(id);
-    });
-  } else {
-    // строка может быть «1,2,3» или «DYNAMIC_1032_123» и т.п.
-    String(raw)
-      .split(/[,\s;]+/)
-      .map(s => s.trim())
+      return;
+    }
+    const s = String(val);
+    // если одна строка — разбиваем по разделителям
+    s.split(/[,\s;]+/)
+      .map(x => x.trim())
       .filter(Boolean)
-      .forEach(s => {
-        const id = normalizeId(s, smartTypeId);
+      .forEach(x => {
+        const id = normalizeId(x, smartTypeId);
         if (id) out.add(id);
       });
-  }
+  };
 
+  // пробегаем ВСЕ поля сделки (особенно UF_*)
+  for (const k in deal) {
+    const v = deal[k];
+    if (v == null) continue;
+    // интерес представляют строки/числа/массивы, чаще это UF_* поля
+    if (k.startsWith('UF_') || Array.isArray(v) || typeof v === 'string' || typeof v === 'number') {
+      collect(v);
+    }
+  }
   return Array.from(out);
 }
+
 
 /**
  * Строим select для crm.item.list (поля, которые реально нужны в таблице)
