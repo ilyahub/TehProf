@@ -1,5 +1,4 @@
-// _worker.js  — Cloudflare Pages Functions
-// Отдаём одну страницу с HTML/JS, которая работает внутри iframe Битрикс24
+// _worker.js — Cloudflare Pages Functions
 
 export default {
   async fetch(request) {
@@ -13,8 +12,7 @@ export default {
 };
 
 /* ------------------------------------------------------------------ */
-/* ВНИМАНИЕ: внутри HTML НЕТ обратных кавычек в <script>, чтобы       */
-/* сборщик не ломался. Если нужно — используйте обычные строки.       */
+/* Вся страница как одна строка. НЕТ обратных кавычек внутри <script>. */
 /* ------------------------------------------------------------------ */
 
 const HTML =
@@ -91,9 +89,7 @@ const HTML =
   </div>\
 <script>\
 (function(){\
-  /* ======= Константы под ваш смарт-процесс ======= */\
-  var ENTITY_TYPE_ID = 1032; /* Укажите нужный ID SPA */\
-  /* Коды пользовательских полей (замените при необходимости) */\
+  var ENTITY_TYPE_ID = 1032; /* ваш SPA */\
   var UF = {\
     DEAL_ID:    "ufCrm_10_1717328865682",\
     LIC_KEY:    "ufCrm_10_1717328730625",\
@@ -106,277 +102,187 @@ const HTML =
   var SELECT_FIELDS = ["id","title","assignedById","stageId","categoryId"].concat(Object.values(UF));\
   var pageSizeEl = document.getElementById("pageSize");\
   var tbody = document.getElementById("tbody");\
-  var listState = { size: Number(pageSizeEl.value||10) };\
-\
-  /* ======= Справочники ======= */\
-  var FIELD_META = null;           /* crm.item.fields */\
-  var USERS = new Map();           /* user.get кэш */\
+  var FIELD_META = null;\
+  var USERS = new Map();\
   var S = { stageMap:new Map(), stageOrderByCat:new Map() };\
 \
   function ready(fn){ document.readyState!=="loading" ? fn() : document.addEventListener("DOMContentLoaded",fn); }\
-\
   function bCall(method, params){\
     return new Promise(function(resolve,reject){\
       if (!window.BX24){ return reject("BX24 not ready"); }\
       BX24.callMethod(method, params||{}, function(r){\
-        if (r.error()){ reject(r.error()+\" — \"+r.error_description()); }\
+        if (r.error()){ reject(r.error()+" — "+r.error_description()); }\
         else {\
-          /* Bitrix REST оболочка возвращает данные по-разному */\
-          var d = (typeof r.data === "function") ? r.data() : (r.answer ? r.answer.result : r); \
-          resolve(d); \
+          var d = (typeof r.data==="function") ? r.data() : (r.answer ? r.answer.result : r);\
+          resolve(d);\
         }\
       });\
     });\
   }\
-\
   function notify(msg){ try{ alert(msg); }catch(e){} }\
 \
-  /* ============ СТАДИИ (без crm.category.stage.list) ============ */\
   async function loadStages(){\
-    S.stageMap.clear();\
-    S.stageOrderByCat.clear();\
+    S.stageMap.clear(); S.stageOrderByCat.clear();\
     var cats = [];\
     try{\
-      var res = await bCall(\"crm.item.category.list\", { entityTypeId: ENTITY_TYPE_ID });\
+      var res = await bCall("crm.item.category.list", { entityTypeId: ENTITY_TYPE_ID });\
       cats = (res && (res.categories||res) || []).map(function(c){\
-        return { ID:Number(c.id||c.ID||0), NAME:(c.name||c.NAME||\"\") };\
+        return { ID:Number(c.id||c.ID||0), NAME:(c.name||c.NAME||"") };\
       });\
-    }catch(e){ cats = [{ID:0, NAME:\"По умолчанию\"}]; }\
-\
+    }catch(e){ cats=[{ID:0,NAME:"По умолчанию"}]; }\
     for (var i=0;i<cats.length;i++){\
-      var cat = cats[i];\
-      var entityId = \"DT\" + ENTITY_TYPE_ID + \"_\" + cat.ID; /* БЕЗ бэктиков */\
-      var statuses = [];\
-      try{\
-        statuses = await bCall(\"crm.status.list\", { filter:{ ENTITY_ID: entityId }, order:{ SORT:\"ASC\" } });\
-      }catch(e){ continue; }\
-\
+      var cat=cats[i];\
+      var entityId = "DT"+ENTITY_TYPE_ID+"_"+cat.ID;\
+      var statuses=[];\
+      try{ statuses = await bCall("crm.status.list", { filter:{ ENTITY_ID:entityId }, order:{ SORT:"ASC" } }); }catch(e){ continue; }\
       var order=[];\
       for (var j=0;j<(statuses||[]).length;j++){\
-        var st = statuses[j];\
-        var id   = String(st.STATUS_ID || st.ID || \"\");\
-        var name = st.NAME || st.TITLE || id;\
-        var sort = Number(st.SORT || 0);\
-        if (!id) continue;\
-        S.stageMap.set(id, { ID:id, NAME:name, CATEGORY_ID:cat.ID, SORT:sort });\
+        var st=statuses[j];\
+        var id = String(st.STATUS_ID||st.ID||"");\
+        var name = st.NAME||st.TITLE||id;\
+        var sort = Number(st.SORT||0);\
+        if(!id) continue;\
+        S.stageMap.set(id,{ID:id,NAME:name,CATEGORY_ID:cat.ID,SORT:sort});\
         order.push(id);\
       }\
-      order.sort(function(a,b){ return (S.stageMap.get(a).SORT||0) - (S.stageMap.get(b).SORT||0); });\
-      S.stageOrderByCat.set(cat.ID, order);\
+      order.sort(function(a,b){ return (S.stageMap.get(a).SORT||0)-(S.stageMap.get(b).SORT||0); });\
+      S.stageOrderByCat.set(cat.ID,order);\
     }\
   }\
 \
-  /* ============ FIELDS META (для списков) ============ */\
   async function ensureFieldMeta(){\
     if (FIELD_META) return FIELD_META;\
-    var res = await bCall(\"crm.item.fields\", { entityTypeId: ENTITY_TYPE_ID });\
+    var res = await bCall("crm.item.fields", { entityTypeId: ENTITY_TYPE_ID });\
     FIELD_META = res.fields || res || {};\
     return FIELD_META;\
   }\
   function getListText(fieldCode, value){\
-    if (value===null || value===undefined || value===\"\") return \"—\";\
+    if (value===null||value===undefined||value==="") return "—";\
     var f = FIELD_META && FIELD_META[fieldCode];\
     if (!f || !Array.isArray(f.items)) return value;\
     var found = f.items.find(function(it){ return String(it.ID)===String(value); });\
     return found ? (found.VALUE || value) : value;\
   }\
 \
-  /* ============ USERS ============ */\
   async function getUser(id){\
-    id = Number(id||0);\
-    if (!id) return null;\
+    id = Number(id||0); if(!id) return null;\
     if (USERS.has(id)) return USERS.get(id);\
-    var res = await bCall(\"user.get\", { ID:id });\
-    var u = Array.isArray(res) ? res[0] : (res && res[0]) || res; /* разные обёртки */\
+    var res = await bCall("user.get", { ID:id });\
+    var u = Array.isArray(res) ? res[0] : (res && res[0]) || res;\
     if (u){ USERS.set(id,u); }\
     return u;\
   }\
 \
-  /* ============ DATA ============ */\
   async function loadItems(){\
-    var res = await bCall(\"crm.item.list\", {\
+    var res = await bCall("crm.item.list", {\
       entityTypeId: ENTITY_TYPE_ID,\
-      order: { id:\"desc\" },\
+      order:{ id:"desc" },\
       select: SELECT_FIELDS,\
       start: -1\
     });\
-    var items = (res && (res.items||res.result&&res.result.items) ) || [];\
+    var items = (res && (res.items||res.result&&res.result.items)) || [];\
     return items.map(function(it){\
       return {\
-        id: it.id,\
-        title: it.title,\
-        assignedById: it.assignedById,\
-        stageId: it.stageId,\
-        categoryId: it.categoryId||0,\
-        dealId: it[UF.DEAL_ID] || null,\
-        licKey: it[UF.LIC_KEY] || \"\",\
-        portalUrl: it[UF.PORTAL_URL] || \"\",\
-        tariff: it[UF.TARIFF] || null,\
-        endTariff: it[UF.END_TARIFF] || null,\
-        endMarket: it[UF.END_MARKET] || null,\
-        product: it[UF.PRODUCT] || null\
+        id: it.id, title: it.title, assignedById: it.assignedById, stageId: it.stageId, categoryId: it.categoryId||0,\
+        dealId: it[UF.DEAL_ID]||null, licKey: it[UF.LIC_KEY]||"", portalUrl: it[UF.PORTAL_URL]||"",\
+        tariff: it[UF.TARIFF]||null, endTariff: it[UF.END_TARIFF]||null, endMarket: it[UF.END_MARKET]||null, product: it[UF.PRODUCT]||null\
       };\
     });\
   }\
 \
   function stagePercent(catId, stageId){\
-    var arr = S.stageOrderByCat.get(catId) || [];\
-    if (!arr.length) return 0;\
+    var arr = S.stageOrderByCat.get(catId) || []; if(!arr.length) return 0;\
     var idx = Math.max(0, arr.indexOf(stageId));\
-    return Math.round((idx+1) / arr.length * 100);\
+    return Math.round((idx+1)/arr.length*100);\
   }\
-\
-  function stageSelectHtml(catId, currentId){\
-    var arr = S.stageOrderByCat.get(catId) || [];\
-    if (!arr.length) return \"<span class=\\\"muted\\\">Нет стадий</span>\";\
-    var html = \"<select class=\\\"select\\\">\";\
+  function stageSelectHtml(catId,currentId){\
+    var arr=S.stageOrderByCat.get(catId)||[]; if(!arr.length) return "<span class=\\"muted\\">Нет стадий</span>";\
+    var html="<select class=\\"select\\">";\
     for (var i=0;i<arr.length;i++){\
-      var sid = arr[i];\
-      var st = S.stageMap.get(sid);\
-      var name = st?st.NAME:sid;\
-      html += \"<option value=\\\"\"+sid+\"\\\"\"+(sid===currentId?\" selected\":\"\")+\">\"+name+\"</option>\";\
+      var sid=arr[i]; var st=S.stageMap.get(sid); var name=st?st.NAME:sid;\
+      html += "<option value=\\""+sid+"\\"" + (sid===currentId?" selected":"") + ">"+name+"</option>";\
     }\
-    html += \"</select>\";\
+    html += "</select>";\
     return html;\
   }\
 \
-  function rowHtml(row){\
-    var st = S.stageMap.get(row.stageId);\
-    var stageTitle = st ? st.NAME : (row.stageId || \"—\");\
-    var percent = stagePercent(row.categoryId, row.stageId);\
-    var responsible = \"—\";\
-    /* user-link заполним асинхронно ниже (чтобы не блокировать таблицу) */\
-\
-    var licKey = row.licKey ? row.licKey : \"—\";\
-    var portalLink = row.portalUrl ? (\"<a href=\\\"\"+row.portalUrl+\"\\\" target=\\\"_blank\\\" rel=\\\"noopener\\\">\"+row.portalUrl+\"</a>\") : \"—\";\
-    var tariffText = getListText(UF.TARIFF, row.tariff);\
-    var productText = getListText(UF.PRODUCT, row.product);\
-    var endTariff = row.endTariff ? row.endTariff : \"—\";\
-    var endMarket = row.endMarket ? row.endMarket : \"—\";\
-\
-    return \"<tr data-id=\\\"\"+row.id+\"\\\" data-cat=\\\"\"+row.categoryId+\"\\\">\"+\
-      \"<td>\"+row.id+\"</td>\"+\
-      \"<td><a href=\\\"#\\\" class=\\\"js-open\\\">\"+escapeHtml(row.title||\"(без названия)\")+\"</a></td>\"+\
-      \"<td class=\\\"js-user\\\">\"+responsible+\"</td>\"+\
-      \"<td>\"+\
-        \"<div class=\\\"stage-cell\\\">\"+\
-          \"<div class=\\\"stage-bar\\\"><div class=\\\"stage-fill\\\" style=\\\"width:\"+percent+\"%\\\"></div></div>\"+\
-          stageSelectHtml(row.categoryId, row.stageId)+\
-        \"</div>\"+\
-      \"</td>\"+\
-      \"<td>\"+(row.dealId==null?\"—\":row.dealId)+\"</td>\"+\
-      \"<td>\"+licKey+\"</td>\"+\
-      \"<td>\"+portalLink+\"</td>\"+\
-      \"<td>\"+tariffText+\"</td>\"+\
-      \"<td>\"+endTariff+\"</td>\"+\
-      \"<td>\"+endMarket+\"</td>\"+\
-      \"<td>\"+productText+\"</td>\"+\
-      \"<td class=\\\"actions\\\">\"+\
-        \"<button class=\\\"btn secondary js-open\\\">Открыть</button> \" +\
-        \"<button class=\\\"btn secondary js-del\\\">Удалить</button>\"+\
-      \"</td>\"+\
-    \"</tr>\";\
+  function escapeHtml(s){\
+    return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\\"/g,"&quot;");\
   }\
 \
-  function escapeHtml(s){\
-    return String(s||\"\")\
-      .replace(/&/g,\"&amp;\")\
-      .replace(/</g,\"&lt;\")\
-      .replace(/>/g,\"&gt;\")\
-      .replace(/\\\"/g,\"&quot;\")\
-      .replace(/\\'/g,\"&#39;\");\
+  function rowHtml(row){\
+    var st=S.stageMap.get(row.stageId); var stageTitle=st?st.NAME:(row.stageId||"—");\
+    var percent=stagePercent(row.categoryId,row.stageId);\
+    var licKey = row.licKey ? row.licKey : "—";\
+    var portalLink = row.portalUrl ? ("<a href=\\""+row.portalUrl+"\\" target=\\"_blank\\" rel=\\"noopener\\">"+row.portalUrl+"</a>") : "—";\
+    var tariffText=getListText(UF.TARIFF,row.tariff);\
+    var productText=getListText(UF.PRODUCT,row.product);\
+    var endTariff=row.endTariff?row.endTariff:"—";\
+    var endMarket=row.endMarket?row.endMarket:"—";\
+    return "<tr data-id=\\""+row.id+"\\" data-cat=\\""+row.categoryId+"\\">" +\
+      "<td>"+row.id+"</td>" +\
+      "<td><a href=\\"#\\" class=\\"js-open\\">"+escapeHtml(row.title||"(без названия)")+"</a></td>" +\
+      "<td class=\\"js-user\\">—</td>" +\
+      "<td><div class=\\"stage-cell\\"><div class=\\"stage-bar\\"><div class=\\"stage-fill\\" style=\\"width:"+percent+"%\\"></div></div>"+stageSelectHtml(row.categoryId,row.stageId)+"</div></td>" +\
+      "<td>"+(row.dealId==null?"—":row.dealId)+"</td>" +\
+      "<td>"+licKey+"</td>" +\
+      "<td>"+portalLink+"</td>" +\
+      "<td>"+tariffText+"</td>" +\
+      "<td>"+endTariff+"</td>" +\
+      "<td>"+endMarket+"</td>" +\
+      "<td>"+productText+"</td>" +\
+      "<td class=\\"actions\\"><button class=\\"btn secondary js-open\\">Открыть</button> <button class=\\"btn secondary js-del\\">Удалить</button></td>" +\
+    "</tr>";\
   }\
 \
   async function render(){\
-    tbody.innerHTML = \"\";\
+    tbody.innerHTML="";\
     await ensureFieldMeta();\
     var rows = await loadItems();\
-    /* Пагинация простая: берём первые N (на реальном проекте можно допилить start/next) */\
-    var size = Number(pageSizeEl.value||10);\
-    rows = rows.slice(0, size);\
-    var html = rows.map(rowHtml).join(\"\");\
-    tbody.innerHTML = html;\
-\
-    /* Подтягиваем ФИО ответственных пост-фактом */\
-    var trs = Array.prototype.slice.call(tbody.querySelectorAll(\"tr\"));\
+    var size=Number(pageSizeEl.value||10); rows=rows.slice(0,size);\
+    tbody.innerHTML = rows.map(rowHtml).join("");\
+    var trs = Array.prototype.slice.call(tbody.querySelectorAll("tr"));\
     for (var i=0;i<trs.length;i++){\
       (function(tr){\
-        var id = Number(tr.getAttribute(\"data-id\"));\
-        var row = rows.find(function(r){return r.id===id;});\
-        if (!row) return;\
+        var id=Number(tr.getAttribute("data-id"));\
+        var row=rows.find(function(r){return r.id===id;}); if(!row) return;\
         getUser(row.assignedById).then(function(u){\
-          var cell = tr.querySelector(\".js-user\");\
-          if (!cell) return;\
-          if (u){\
-            var name = [u.NAME,u.LAST_NAME].filter(Boolean).join(\" \") || (u.LAST_NAME||u.NAME||(\"ID \"+u.ID));\
-            cell.innerHTML = \"<a href=\\\"/company/personal/user/\"+u.ID+\"/\\\" target=\\\"_blank\\\">\"+escapeHtml(name)+\"</a>\";\
-          } else { cell.textContent = \"—\"; }\
-        }).catch(function(){\
-          var cell = tr.querySelector(\".js-user\"); if (cell) cell.textContent = \"—\";\
-        });\
+          var cell=tr.querySelector(".js-user"); if(!cell) return;\
+          if(u){\
+            var name=[u.NAME,u.LAST_NAME].filter(Boolean).join(" ") || (u.LAST_NAME||u.NAME||("ID "+u.ID));\
+            cell.innerHTML = "<a href=\\"/company/personal/user/"+u.ID+"/\\" target=\\"_blank\\">"+escapeHtml(name)+"</a>";\
+          }else{ cell.textContent="—"; }\
+        }).catch(function(){ var c=tr.querySelector(".js-user"); if(c) c.textContent="—"; });\
       })(trs[i]);\
     }\
   }\
 \
-  /* ======= Слушатели ======= */\
-  tbody.addEventListener(\"change\", function(e){\
-    var sel = e.target;\
-    if (sel.tagName!==\"SELECT\") return;\
-    var tr = sel.closest(\"tr\");\
-    if (!tr) return;\
-    var id = Number(tr.getAttribute(\"data-id\"));\
-    var catId = Number(tr.getAttribute(\"data-cat\"));\
-    var newStage = sel.value;\
-    bCall(\"crm.item.update\", { entityTypeId: ENTITY_TYPE_ID, id: id, fields: { stageId: newStage } })\
+  tbody.addEventListener("change", function(e){\
+    var sel=e.target; if(sel.tagName!=="SELECT") return;\
+    var tr=sel.closest("tr"); if(!tr) return;\
+    var id=Number(tr.getAttribute("data-id"));\
+    var newStage=sel.value;\
+    bCall("crm.item.update",{ entityTypeId:ENTITY_TYPE_ID, id:id, fields:{ stageId:newStage } })\
       .then(function(){ render(); })\
-      .catch(function(err){ notify(\"Ошибка смены стадии: \"+err); });\
+      .catch(function(err){ notify("Ошибка смены стадии: "+err); });\
   });\
+  tbody.addEventListener("click", function(e){\
+    var btn=e.target.closest(".js-open");\
+    if(btn){ e.preventDefault(); var tr=btn.closest("tr"); var id=Number(tr.getAttribute("data-id")); BX24.openPath("/crm/type/"+ENTITY_TYPE_ID+"/details/"+id+"/"); return; }\
+    var del=e.target.closest(".js-del");\
+    if(del){ var tr2=del.closest("tr"); var id2=Number(tr2.getAttribute("data-id")); if(!confirm("Удалить элемент #"+id2+"?")) return; bCall("crm.item.delete",{ entityTypeId:ENTITY_TYPE_ID, id:id2 }).then(function(){ render(); }).catch(function(err){ notify("Ошибка удаления: "+err); }); }\
+  });\
+  document.getElementById("btnRefresh").addEventListener("click", function(){ render(); });\
+  pageSizeEl.addEventListener("change", function(){ render(); });\
+  document.getElementById("btnNew").addEventListener("click", function(){ BX24.openPath("/crm/type/"+ENTITY_TYPE_ID+"/details/0/?open=edit"); });\
+  document.getElementById("btnPick").addEventListener("click", function(){ BX24.openPath("/crm/type/"+ENTITY_TYPE_ID+"/list/"); });\
 \
-  tbody.addEventListener(\"click\", function(e){\
-    var btn = e.target.closest(\".js-open\");\
-    if (btn){\
-      e.preventDefault();\
-      var tr = btn.closest(\"tr\");\
-      var id = Number(tr.getAttribute(\"data-id\"));\
-      /* Открываем детальную карточку в слайдере */\
-      BX24.openPath(\"/crm/type/\"+ENTITY_TYPE_ID+\"/details/\"+id+\"/\");\
-      return;\
-    }\
-    var del = e.target.closest(\".js-del\");\
-    if (del){\
-      var tr2 = del.closest(\"tr\");\
-      var id2 = Number(tr2.getAttribute(\"data-id\"));\
-      if (!confirm(\"Удалить элемент #\"+id2+\"?\")) return;\
-      bCall(\"crm.item.delete\", { entityTypeId: ENTITY_TYPE_ID, id: id2 })\
-        .then(function(){ render(); })\
-        .catch(function(err){ notify(\"Ошибка удаления: \"+err); });\
-    }\
-  });\
-\
-  document.getElementById(\"btnRefresh\").addEventListener(\"click\", function(){ render(); });\
-  pageSizeEl.addEventListener(\"change\", function(){ render(); });\
-  document.getElementById(\"btnNew\").addEventListener(\"click\", function(){\
-    BX24.openPath(\"/crm/type/\"+ENTITY_TYPE_ID+\"/details/0/?open=edit\");\
-  });\
-  document.getElementById(\"btnPick\").addEventListener(\"click\", function(){\
-    /* Откроем список для выбора: пользователь сохранит — потом жмёт Обновить */\
-    BX24.openPath(\"/crm/type/\"+ENTITY_TYPE_ID+\"/list/\");\
-  });\
-\
-  /* ======= ИНИЦИАЛИЗАЦИЯ ======= */\
-  function start(){\
-    loadStages().then(function(){ render(); }).catch(function(e){ notify(\"Ошибка загрузки стадий: \"+e); });\
-  }\
+  function start(){ loadStages().then(function(){ render(); }).catch(function(e){ notify("Ошибка загрузки стадий: "+e); }); }\
   ready(function(){\
-    /* Ждём BX24 */\
-    var tm = setTimeout(function(){ /* запасной таймаут */ }, 1500);\
+    var tm=setTimeout(function(){},1500);\
     function boot(){ clearTimeout(tm); start(); }\
-    if (window.BX24 && typeof BX24.init === \"function\"){ BX24.init(boot); }\
-    else {\
-      var wait = setInterval(function(){\
-        if (window.BX24 && typeof BX24.init === \"function\"){ clearInterval(wait); BX24.init(boot); }\
-      }, 100);\
-    }\
+    if (window.BX24 && typeof BX24.init==="function"){ BX24.init(boot); }\
+    else { var wait=setInterval(function(){ if(window.BX24&&typeof BX24.init==="function"){ clearInterval(wait); BX24.init(boot); } },100); }\
   });\
 })();\
 </script>\
