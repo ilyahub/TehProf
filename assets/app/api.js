@@ -1,7 +1,6 @@
 // assets/app/api.js
 import { A } from './utils.js';
 
-// Обёртки над BX24
 export const bx = {
   call(method, params = {}) {
     return new Promise(resolve => BX24.callMethod(method, params, res => resolve(res)));
@@ -11,24 +10,15 @@ export const bx = {
   }
 };
 
-// =====================
-// ВЕРХНЕУРОВНЕВЫЕ ВЫЗОВЫ
-// =====================
-
 export async function getDeal(id) {
   const r = await bx.call('crm.deal.get', { id });
   return r.error() ? null : r.data();
 }
 
-/**
- * Достаём ID связанных элементов из поля сделки:
- *  - поддерживает и DYNAMIC_1032_123, и просто числа
- *  - если указан typeId — отфильтровывает только нужный SPA тип
- */
+/** Из поля сделки достаём ID связанных элементов (DYNAMIC_* и числа). */
 export async function getLinkedItemIds(dealId, fieldCode, typeId /* optional */) {
   const r = await bx.call('crm.deal.get', { id: dealId });
   if (r.error()) return [];
-
   const deal = r.data() || {};
   const raw =
     deal?.[fieldCode] ??
@@ -54,15 +44,10 @@ export async function getLinkedItemIds(dealId, fieldCode, typeId /* optional */)
   return Array.from(ids);
 }
 
-/**
- * НАДЁЖНАЯ загрузка элементов по списку ID:
- *  1) пытаемся через crm.item.list с {'@id': [...]} и select
- *  2) если пусто — батчим crm.item.get по каждому id
- */
+/** Надёжная загрузка по ids: list с {'@id': ids} -> если пусто, batch get. */
 export async function getItemsByIds(entityTypeId, ids, select = []) {
   if (!Array.isArray(ids) || !ids.length) return [];
 
-  // попытка №1 — списком
   const r = await bx.call('crm.item.list', {
     entityTypeId,
     filter: { '@id': ids },
@@ -76,7 +61,6 @@ export async function getItemsByIds(entityTypeId, ids, select = []) {
   }
   if (items.length) return items;
 
-  // попытка №2 — батчем по одному
   const calls = {};
   ids.forEach((id, i) => (calls['g' + i] = ['crm.item.get', { entityTypeId, id }]));
   const res = await bx.batch(calls);
@@ -107,7 +91,7 @@ export async function updateItemStage(entityTypeId, id, stageId) {
   return !r.error();
 }
 
-export async function listUsers(ids /* number[] */) {
+export async function listUsers(ids) {
   const calls = {};
   ids.forEach((uid, i) => (calls['u' + i] = ['user.get', { ID: String(uid) }]));
   const res = await bx.batch(calls);
@@ -122,7 +106,7 @@ export async function listUsers(ids /* number[] */) {
   return map;
 }
 
-export async function listCategoryStages(entityTypeId, categoryIds /* number[] */) {
+export async function listCategoryStages(entityTypeId, categoryIds) {
   const calls = {};
   categoryIds.forEach((cid, i) => (calls['s' + i] = ['crm.category.stage.list', { entityTypeId, categoryId: cid }]));
   const res = await bx.batch(calls);
@@ -130,4 +114,3 @@ export async function listCategoryStages(entityTypeId, categoryIds /* number[] *
   for (const k in res) if (!res[k].error()) rows.push(res[k].data());
   return rows;
 }
-День быстро
