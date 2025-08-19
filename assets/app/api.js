@@ -237,3 +237,29 @@ export async function fetchFieldMeta(entityTypeId) {
 
   return { keymap, enums };
 }
+// --- ДОБАВИТЬ КОНЕЦ assets/app/api.js ---
+
+// Обновить UF-поле сделки (массив ID связанных элементов)
+export async function updateDealLinkedIds(dealId, fieldCode, ids) {
+  const fields = {};
+  fields[fieldCode] = ids;
+  const r = await bx.call('crm.deal.update', { id: dealId, fields });
+  return !r.error();
+}
+
+// Универсальная попытка открыть путь Bitrix (внутри фрейма)
+export function openBxPath(path) {
+  try {
+    if (window.BX24 && typeof BX24.openPath === 'function') {
+      BX24.openPath(path);
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
+// Сервисный: получить путь к карточке смарт-процесса
+export function smartItemPath(entityTypeId, id) {
+  // Для смарт-процессов в Битрикс работает такой путь:
+  return `/crm/type/${entityTypeId}/details/${id}/`;
+}
