@@ -91,6 +91,52 @@ async function buildStages(items) {
   });
 }
 
+// Надёжная загрузка элементов по списку ID.
+// 1) Пробуем crm.item.list с {'@id': ids}
+// 2) Если вернуло пусто — батчим crm.item.get по каждому ID
+async function robustGetItemsByIds(typeId, ids, select = []) {
+  function listOnce() {
+    return new Promise(resolve => {
+      BX24.callMethod(
+        'crm.item.list',
+        { entityTypeId: typeId, filter: { '@id': ids }, select },
+        r => {
+          if (r.error()) return resolve([]);
+          const d = r.data() || {};
+          resolve(Array.isArray(d.items) ? d.items : []);
+        }
+      );
+    });
+  }
+
+  function batchGet() {
+    return new Promise(resolve => {
+      const calls = {};
+      ids.forEach((id, i) => (calls['g' + i] = ['crm.item.get', { entityTypeId: typeId, id }]));
+      BX24.callBatch(
+        calls,
+        res => {
+          const arr = [];
+          for (const k in res) {
+            if (!res[k].error()) {
+              const d = res[k].data();
+              if (d && d.item) arr.push(d.item);
+            }
+          }
+          resolve(arr);
+        },
+        true
+      );
+    });
+  }
+
+  const fromList = await listOnce();
+  if (fromList && fromList.length) return fromList;
+
+  // fallback
+  return await batchGet();
+}
+
 /* Главная загрузка */
 async function loadAll() {
   if (!S.dealId) {
@@ -132,7 +178,7 @@ async function loadAll() {
   const select = ['id','title','stageId','categoryId','assignedById', ...ufApiNames];
 
   // Читаем элементы
-  S.items = await getItemsByIds(S.typeId, S.ids, select);
+  S.items = await robustGetItemsByIds(S.typeId, S.ids, select);
 
   // если по какой-то причине REST не вернул UF-поля (редко, но бывает) —
   // позже utils.UF попробует достать их и без select; но для нас важно,
