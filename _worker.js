@@ -15,23 +15,26 @@ export default {
       return env.ASSETS.fetch(request);
     }
 
-    // Ранний снимок POST (PLACEMENT_OPTIONS), чтобы прокинуть в boot
-    let placement = null, placementOptions = '';
+    // 2) Ранний снимок POST — достаём PLACEMENT/PLACEMENT_OPTIONS (ID сделки)
+    let placement = null;
+    let placementOptions = '';
     try {
       if (request.method !== 'GET') {
         const ct = (request.headers.get('content-type') || '').toLowerCase();
         if (ct.includes('form')) {
           const fd = await request.formData();
-          placement        = fd.get('PLACEMENT') || null;
+          placement = fd.get('PLACEMENT') || null;
           placementOptions = fd.get('PLACEMENT_OPTIONS') || '';
         } else if (ct.includes('json')) {
           const j = await request.json();
-          placement        = j.PLACEMENT || null;
+          placement = j.PLACEMENT || null;
           placementOptions = j.PLACEMENT_OPTIONS || '';
         }
       }
-    } catch {}
+    } catch (_) {}
 
+    // 3) HTML-страница (лоадер)
+    const PORTAL_ORIGIN = 'https://tehprof.bitrix24.kz';
     const boot = { placement, placementOptions };
 
     const html = `<!doctype html>
