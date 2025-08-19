@@ -27,15 +27,31 @@ export const fmtDate = v => {
   return `${z(d.getDate())}.${z(d.getMonth() + 1)}.${d.getFullYear()}`;
 };
 
-// Универсальный геттер UF-поля: ищет в нескольких местах/регистрах
-export function UF(item, code) {
+// Универсальный геттер UF-поля (с учётом карты соответствий из main.js)
+export function UF(item, code){
   if (!item || !code) return undefined;
+
+  // если заранее построили карту: UF_* -> ufCrm*
+  if (window.__UF_KEYMAP && window.__UF_KEYMAP[code]) {
+    const k = window.__UF_KEYMAP[code];
+    if (item[k] !== undefined) return item[k];
+  }
+
+  // прямое совпадение
   if (item[code] !== undefined) return item[code];
+
+  // без регистра
   const lc = String(code).toLowerCase();
-  for (const k in item) if (String(k).toLowerCase() === lc) return item[k];
+  for (const k in item) {
+    if (k.toLowerCase() === lc) return item[k];
+  }
+
+  // иногда REST кладёт всё в .fields
   const f = item.fields || item.FIELDS || {};
   if (f[code] !== undefined) return f[code];
-  for (const k in f) if (String(k).toLowerCase() === lc) return f[k];
+  for (const k in f) {
+    if (k.toLowerCase() === lc) return f[k];
+  }
   return undefined;
 }
 
