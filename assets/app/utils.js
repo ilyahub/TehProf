@@ -1,3 +1,4 @@
+// assets/app/utils.js
 export const $ = s => document.querySelector(s);
 export const A = v => (!v ? [] : (Array.isArray(v) ? v : [v]));
 export const J = s => { try { return JSON.parse(s); } catch { return {}; } };
