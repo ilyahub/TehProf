@@ -1,8 +1,41 @@
 // assets/app/main.js
-import { DEAL_FIELD_CODE, SMART_ENTITY_TYPE_ID, F } from './config.js';
-import { $, A, J, pick, fmtDate, UF, bcode, toIdFromBinding, parseStage, toCamelUF } from './utils.js';
+// ES-модуль. Работает с BX24 SDK и строит таблицу лицензий в сделке.
 
-// ===== UI refs
+import { $, $$, A, J, pick, fmtDate, UF, putEnum, enumText, idFromBinding, parseStage } from './utils.js';
+import { DEAL_FIELD_CODE, SMART_ENTITY_TYPE_ID, F } from './config.js';
+
+const S = {
+  dealId: null,
+  field: DEAL_FIELD_CODE,
+  typeId: SMART_ENTITY_TYPE_ID,
+
+  // данные
+  mode: 'ids',        // ids | bindings
+  bindings: [],
+  ids: [],
+  items: [],
+
+  // справочники
+  users: {},
+  ufEnums: {},
+
+  // стадии
+  stagesByFull: {},           // 'DT1032_16:NEW' -> { id, name, sort, categoryId, statusId }
+  stagesByCatStatus: {},      // '16:NEW'        -> { ... }
+  catStages: {},              // cid -> [ {id, name, sort, statusId} ]
+  cats: {},                   // cid -> { list, maxSort }
+
+  // ui состояние
+  view: { page: 1, size: 10, sortKey: 'id', sortDir: 'asc' },
+  filter: { stage: '', deal: '', url: '', key: '', tariff: '', product: '' },
+
+  // какие колонки показывать (порядок фиксирован в разметке)
+  cols: JSON.parse(localStorage.getItem('cols_v1') || 'null')
+    || ['stage', 'deal', 'url', 'tariff', 'tEnd', 'mEnd', 'product', 'act'],
+  widths: JSON.parse(localStorage.getItem('widths_v1') || '{}'),
+};
+
+// --- UI refs (страница уже отрендерена из Worker’а)
 const ui = {
   rows: $('#rows'),
   ref: $('#btnRefresh'),
@@ -15,71 +48,26 @@ const ui = {
   pgNext: $('#pgNext'),
   pgInfo: $('#pgInfo'),
 
-  fTitle: $('#fTitle'),
-  fAss:   $('#fAss'),
   fStage: $('#fStage'),
-  fDeal:  $('#fDeal'),
-  fKey:   $('#fKey'),
-  fUrl:   $('#fUrl'),
-  fTariff:$('#fTariff'),
-  fProduct:$('#fProduct'),
+  fDeal: $('#fDeal'),
+  fUrl:  $('#fUrl'),
+  fKey:  $('#fKey'),
+  fTariff: $('#fTariff'),
+  fProduct: $('#fProduct'),
 
   head: document.querySelector('tr.head'),
   filters: document.querySelector('tr.filters'),
 
   colModal: $('#colModal'),
   colList:  $('#colList'),
-  colCancel:$('#colCancel'),
-  colApply: $('#colApply'),
+  colCancel: $('#colCancel'),
+  colApply:  $('#colApply'),
 };
 
-const COL_LABEL = {
-  id:'ID', title:'Название', ass:'Ответственный', stage:'Стадия',
-  deal:'ID исходной сделки', key:'Лицензионный ключ', url:'Адрес портала',
-  tariff:'Текущий тариф', tEnd:'Окончание тарифа', mEnd:'Окончание подписки',
-  product:'Продукт', act:'Действия'
-};
-
-const COLS_ALL = ['id','title','ass','stage','deal','key','url','tariff','tEnd','mEnd','product','act'];
-
-// ===== state
-const S = {
-  dealId: null,
-  field: DEAL_FIELD_CODE,
-  typeId: SMART_ENTITY_TYPE_ID,
-
-  mode: 'ids',          // 'ids' | 'bindings'
-  bindings: [],
-  ids: [],
-
-  items: [],
-  users: {},            // { [userId]: { name, path } }
-
-  ufEnums: {},          // { [UF_CODE]: { [ID]: 'VALUE' } }
-  stagesByFull: {},     // { [fullId]: {id,name,sort,categoryId,statusId} }
-  stagesByCatStatus:{}, // { 'catId:statusId': StageObj }
-  catStages: {},        // { [catId]: Array<StageObj> }
-  cats: {},             // { [catId]: {maxSort} }
-
-  view: { page:1, size:10, sortKey:'id', sortDir:'asc' },
-  filter: { title:'', ass:'', stage:'', deal:'', key:'', url:'', tariff:'', product:'' },
-
-  cols: JSON.parse(localStorage.getItem('cols_v2')||'null') ||
-        ['id','title','ass','stage','deal','key','url','tariff','tEnd','mEnd','product','act'],
-  widths: JSON.parse(localStorage.getItem('widths_v2')||'{}'),
-};
-
-// ===== misc helpers
-const enumText = (code, val) => {
-  if (val === null || val === undefined || val === '') return '—';
-  const dict = S.ufEnums[code] || {};
-  return dict[val] || val;
-};
-
-// автоподгон высоты фрейма (резиновая высота контейнера)
+// авто-подгон высоты фрейма
 const fit = (() => {
   let raf;
-  return function() {
+  return function () {
     if (!window.BX24) return;
     cancelAnimationFrame(raf);
     raf = requestAnimationFrame(() => {
@@ -90,77 +78,76 @@ const fit = (() => {
 })();
 new ResizeObserver(() => fit()).observe(document.body);
 
-async function hydrateUFsIfMissing(){
-  const need = [
-    F.dealIdSource, F.licenseKey, F.portalUrl,
-    F.tariff, F.tariffEnd, F.marketEnd, F.product
-  ];
-
-  const missing = S.items.some(it => need.some(code => it[code] === undefined));
-  if (!missing) return;
-
-  const calls = {};
-  S.items.forEach((it, i) => (calls['g' + i] = ['crm.item.get', { entityTypeId: S.typeId, id: it.id }]));
-
-  await new Promise(res => BX24.callBatch(calls, rr => {
-    for (const k in rr){
-      if (rr[k].error()) continue;
-      const full = rr[k].data().item;
-      const idx = S.items.findIndex(x => x.id === full.id);
-      if (idx > -1) Object.assign(S.items[idx], full);
-    }
-    res();
-  }, true));
-}
-// ранний ID сделки из POST-BOOT (PLACEMENT_OPTIONS)
-(function fromPost() {
+// ранний ID из POST/PLACEMENT_OPTIONS
+(function bootstrapDealIdFromPost() {
   const boot = window.__BOOT__ || {};
   const pid = J(boot.placementOptions || '{}').ID || null;
   if (pid) S.dealId = Number(pid);
 })();
 
-// ====== BX24 init & start
-BX24.init(function () {
+// BX init
+BX24.init(() => {
   if (!S.dealId) {
     const p = BX24.getParam('PLACEMENT_OPTIONS');
     const pid = (J(p || '{}').ID) || null;
     if (pid) S.dealId = Number(pid);
   }
   let started = false;
-  const start = () => {
-    if (started || !S.dealId) return;
-    started = true;
-    load();
-    fit();
-  };
+  const start = () => { if (started || !S.dealId) return; started = true; load(); fit(); };
   BX24.placement.info(() => start());
   setTimeout(start, 300);
   setTimeout(start, 1500);
 });
 
-// режим хранения связей: список ID или строки DYNAMIC_...
+// --- Загрузка
 function detectMode(raw) {
   const a = A(raw);
   return a.some(v => typeof v === 'string' && v.startsWith('DYNAMIC_')) ? 'bindings' : 'ids';
 }
 
-// ===== ЗАГРУЗКА
-function load() {
-  if (!S.dealId) {
-    ui.rows.innerHTML = '<tr><td colspan="12" class="err">Нет ID сделки</td></tr>';
-    return;
+function bcode(typeId, id) { return `DYNAMIC_${typeId}_${id}`; }
+
+function saveBindings(next) {
+  const f = {}; f[S.field] = next;
+  BX24.callMethod('crm.deal.update', { id: S.dealId, fields: f }, r => {
+    if (r.error()) { alert('Ошибка: ' + r.error_description()); }
+    load();
+  });
+}
+
+function attach(ids) {
+  if (S.mode === 'bindings') {
+    const add = ids.map(id => bcode(S.typeId, id));
+    saveBindings(Array.from(new Set([...(S.bindings || []), ...add])));
+  } else {
+    saveBindings(Array.from(new Set([...(A(S.bindings).map(Number)), ...ids])));
   }
+}
+
+function detach(id) {
+  if (S.mode === 'bindings') {
+    const code = bcode(S.typeId, id);
+    saveBindings((S.bindings || []).filter(c => c !== code));
+  } else {
+    saveBindings(A(S.bindings).map(Number).filter(v => v !== id));
+  }
+}
+
+// основная загрузка
+function load() {
+  if (!S.dealId) { ui.rows.innerHTML = '<tr><td colspan="12" class="err">Нет ID сделки</td></tr>'; return; }
+
   BX24.callMethod('crm.deal.get', { id: S.dealId }, r => {
     if (r.error()) {
       ui.rows.innerHTML = `<tr><td colspan="12" class="err">${r.error_description()}</td></tr>`;
       return;
     }
+
     const raw = r.data()[S.field];
     S.mode = detectMode(raw);
     S.bindings = A(raw);
-
     S.ids = (S.mode === 'bindings')
-      ? S.bindings.map(c => toIdFromBinding(c, S.typeId)).filter(Boolean)
+      ? S.bindings.map(c => idFromBinding(c, S.typeId)).filter(Boolean)
       : A(raw).map(Number).filter(Boolean);
 
     if (!S.ids.length) {
@@ -169,26 +156,18 @@ function load() {
       return;
     }
 
-    // ВАЖНО: для UF-полей добавляем camelCase имена
-    const UF_CODES = [F.dealIdSource, F.licenseKey, F.portalUrl, F.tariff, F.tariffEnd, F.marketEnd, F.product];
     const select = [
-      'id','title','stageId','categoryId','assignedById',
-      ...UF_CODES.map(toCamelUF),
-      ...UF_CODES, // можно и верхние оставить — не мешают
+      'id', 'title', 'stageId', 'categoryId', 'assignedById',
+      F.dealIdSource, F.licenseKey, F.portalUrl, F.tariff, F.tariffEnd, F.marketEnd, F.product
     ];
 
-    BX24.callMethod('crm.item.list', {
-      entityTypeId: S.typeId,
-      filter: { '@id': S.ids },
-      select
-    }, async rr => {
+    BX24.callMethod('crm.item.list', { entityTypeId: S.typeId, filter: { '@id': S.ids }, select }, async rr => {
       let items = [];
-      if (!rr.error()) {
-        items = rr.data().items || [];
-      } else {
-        // фолбэк на старых порталах
+      if (!rr.error()) items = rr.data().items || [];
+      else {
+        // старые порталы: доберём поштучно
         const calls = {};
-        S.ids.forEach((id,i) => calls['g'+i] = ['crm.item.get', { entityTypeId: S.typeId, id }]);
+        S.ids.forEach((id, i) => calls['g' + i] = ['crm.item.get', { entityTypeId: S.typeId, id }]);
         BX24.callBatch(calls, res => {
           for (const k in res) if (!res[k].error()) items.push(res[k].data().item);
           proceed(items);
@@ -196,37 +175,33 @@ function load() {
         return;
       }
       proceed(items);
-
-      async function proceed(items) {
-        S.items = items;
-        await buildUFEnums();    // словари списков
-        await buildUsers(items); // ответственные
-        await buildStages(items);// стадии + фолбэк
-        await hydrateUFsIfMissing();
-        render();
-        fit();
-      }
     });
+
+    async function proceed(items) {
+      S.items = items;
+      await buildUFEnums();       // словари для списков
+      await buildUsers(items);    // ответственные
+      await buildStages(items);   // стадии (с фолбэком)
+      await hydrateUFsIfMissing();// если UF-поля обрезались в list
+
+      render();
+      fit();
+    }
   });
 }
 
-// ==== словари UF списков (Тариф, Продукт) — надёжно
+// --- Справочники UF (перечисления)
 async function buildUFEnums() {
-  // 1) Пытаемся через userfield.list
+  // 1) crm.item.userfield.list
   await new Promise(res => {
     BX24.callMethod('crm.item.userfield.list', { entityTypeId: S.typeId }, rr => {
       if (!rr.error()) {
         const list = rr.data().userFields || rr.data() || [];
         list.forEach(f => {
-          const code  = pick(f, 'FIELD_NAME', 'fieldName'); // верхний UF_CRM_...
+          const code = pick(f, 'FIELD_NAME', 'fieldName');
           const enums = pick(f, 'LIST', 'list') || [];
           if (code && Array.isArray(enums) && enums.length) {
-            S.ufEnums[code] = S.ufEnums[code] || {};
-            enums.forEach(e => {
-              const id  = Number(pick(e, 'ID', 'VALUE_ID'));
-              const val = String(pick(e, 'VALUE') || id);
-              if (id) S.ufEnums[code][id] = val;
-            });
+            enums.forEach(e => putEnum(S.ufEnums, code, pick(e, 'ID', 'VALUE_ID'), pick(e, 'VALUE')));
           }
         });
       }
@@ -234,21 +209,15 @@ async function buildUFEnums() {
     });
   });
 
-  // 2) Добираем из crm.item.fields (fallback + доп.страховка)
+  // 2) crm.item.fields — доберём items, если они есть
   await new Promise(res => {
     BX24.callMethod('crm.item.fields', { entityTypeId: S.typeId }, rr => {
       if (!rr.error()) {
         const fields = rr.data() || {};
         [F.tariff, F.product].forEach(code => {
-          const f = fields[ toCamelUF(code) ] || fields[ code ] || {};
-          const items = f.items || f.ITEMS || [];
-          if (Array.isArray(items) && items.length) {
-            S.ufEnums[code] = S.ufEnums[code] || {};
-            items.forEach(e => {
-              const id  = Number(pick(e,'ID'));
-              const val = String(pick(e,'VALUE') || id);
-              if (id) S.ufEnums[code][id] = val;
-            });
+          const items = (fields[code]?.items || fields[code]?.ITEMS || []);
+          if (items && items.length) {
+            items.forEach(e => putEnum(S.ufEnums, code, e.ID, e.VALUE));
           }
         });
       }
@@ -257,102 +226,126 @@ async function buildUFEnums() {
   });
 }
 
-// ==== Имена ответственных
+// --- Ответственные
 async function buildUsers(items) {
   const ids = Array.from(new Set(items.map(i => Number(i.assignedById)).filter(Boolean)));
   if (!ids.length) return;
+
   const calls = {};
-  ids.forEach((uid,i) => calls['u'+i] = ['user.get', { ID: String(uid) }]);
+  ids.forEach((uid, i) => calls['u' + i] = ['user.get', { ID: String(uid) }]);
+
   await new Promise(res => BX24.callBatch(calls, r => {
     for (const k in r) {
-      if (!r[k].error()) {
-        const raw = (r[k].data() || [])[0] || {};
-        const id  = Number(pick(raw,'ID'));
-        if (!id) continue;
-        const name = [pick(raw,'LAST_NAME'), pick(raw,'NAME'), pick(raw,'SECOND_NAME')].filter(Boolean).join(' ')
-                  || pick(raw,'LOGIN') || ('ID '+id);
-        S.users[id] = { name, path: `/company/personal/user/${id}/` };
-      }
+      if (r[k].error()) continue;
+      const raw = (r[k].data() || [])[0] || {};
+      const id = Number(pick(raw, 'ID'));
+      if (!id) continue;
+      const name = [pick(raw, 'LAST_NAME'), pick(raw, 'NAME'), pick(raw, 'SECOND_NAME')]
+        .filter(Boolean).join(' ') || pick(raw, 'LOGIN') || ('ID ' + id);
+      S.users[id] = { name, path: '/company/personal/user/' + id + '/' };
     }
     res();
   }, true));
 }
 
-// Стадии смарт-процесса: собираем по категориям без дублей
-async function buildStages(items){
+// --- Стадии (с фолбэком)
+async function buildStages(items) {
   const cats = Array.from(new Set(items.map(i => Number(i.categoryId)).filter(Boolean)));
   if (!cats.length) return;
 
   const calls = {};
   cats.forEach((cid, i) => calls['s' + i] = ['crm.category.stage.list', { entityTypeId: S.typeId, categoryId: cid }]);
 
+  let ok = false;
+
   await new Promise(res => BX24.callBatch(calls, r => {
-    // Обнулим перед сборкой, чтобы не плодить дубли при повторных загрузках
+    // очистим перед сборкой, чтобы не плодить дубли
     S.stagesByFull = {};
     S.stagesByCatStatus = {};
     S.catStages = {};
     S.cats = {};
 
-    for (const k in r){
+    for (const k in r) {
       if (r[k].error()) continue;
+      ok = true;
 
-      // Ответ разные порталы отдают по-разному — нормализуем
       let data = r[k].data();
       let list = Array.isArray(data) ? data : (data?.stages || data?.STAGES) || [];
       if (!Array.isArray(list) && data?.result) list = data.result.stages || data.result.STAGES || [];
 
-      list.forEach(stRaw => {
-        const statusId   = String(pick(stRaw, 'statusId', 'STATUS_ID') || '');
-        const name       = String(pick(stRaw, 'name', 'NAME') || statusId);
-        const sort       = Number(pick(stRaw, 'sort', 'SORT') || 0);
-        const categoryId = Number(pick(stRaw, 'categoryId', 'CATEGORY_ID') || pick(list[0] || {}, 'categoryId', 'CATEGORY_ID') || 0);
-        const fullId     = String(pick(stRaw, 'id', 'ID') || (categoryId ? `DT${S.typeId}_${categoryId}:${statusId}` : statusId));
+      list.forEach(st => {
+        const statusId   = String(pick(st, 'statusId', 'STATUS_ID') || '');
+        const name       = String(pick(st, 'name', 'NAME') || statusId);
+        const sort       = Number(pick(st, 'sort', 'SORT') || 0);
+        const categoryId = Number(pick(st, 'categoryId', 'CATEGORY_ID') || 0);
+        const fullId     = String(pick(st, 'id', 'ID') || (categoryId ? `DT${S.typeId}_${categoryId}:${statusId}` : statusId));
 
-        // карта по полному ID
         S.stagesByFull[fullId] = { id: fullId, name, sort, categoryId, statusId };
-        // карта по паре categoryId:statusId
         S.stagesByCatStatus[categoryId + ':' + statusId] = S.stagesByFull[fullId];
 
         if (!S.catStages[categoryId]) S.catStages[categoryId] = [];
-        // добавляем без дублей по полному ID
-        if (!S.catStages[categoryId].some(s => s.id === fullId)){
+        if (!S.catStages[categoryId].some(x => x.id === fullId)) {
           S.catStages[categoryId].push({ id: fullId, name, sort, statusId });
         }
       });
     }
 
-    // сортировка внутри каждой категории + служебная инфа
     Object.keys(S.catStages).forEach(cid => {
       const arr = S.catStages[cid].sort((a, b) => a.sort - b.sort);
-      S.cats[cid] = {
-        list: arr,
-        maxSort: arr.length ? Math.max(...arr.map(s => s.sort)) : 100
-      };
+      S.cats[cid] = { list: arr, maxSort: arr.length ? Math.max(...arr.map(s => s.sort)) : 100 };
     });
 
     res();
   }, true));
+
+  // Фолбэк: старые порталы
+  if (!ok || !Object.keys(S.stagesByFull).length) {
+    await Promise.all(cats.map(async cid => {
+      await new Promise(res => {
+        BX24.callMethod('crm.status.list', { filter: { ENTITY_ID: `DYNAMIC_${S.typeId}_STAGE_${cid}` } }, rr => {
+          if (!rr.error()) {
+            const list = rr.data() || [];
+            list.forEach(st => {
+              const statusId = String(pick(st, 'STATUS_ID', 'statusId') || '');
+              const name     = String(pick(st, 'NAME', 'name') || statusId);
+              const sort     = Number(pick(st, 'SORT', 'sort') || 0);
+              const fullId   = `DT${S.typeId}_${cid}:${statusId}`;
+
+              S.stagesByFull[fullId] = { id: fullId, name, sort, categoryId: cid, statusId };
+              S.stagesByCatStatus[cid + ':' + statusId] = S.stagesByFull[fullId];
+
+              if (!S.catStages[cid]) S.catStages[cid] = [];
+              if (!S.catStages[cid].some(x => x.id === fullId)) {
+                S.catStages[cid].push({ id: fullId, name, sort, statusId });
+              }
+            });
+
+            const arr = S.catStages[cid].sort((a, b) => a.sort - b.sort);
+            S.cats[cid] = { list: arr, maxSort: arr.length ? Math.max(...arr.map(s => s.sort)) : 100 };
+          }
+          res();
+        });
+      });
+    }));
+  }
 }
 
 function getStageObject(item) {
   const sid = item.stageId;
   const { categoryId, statusId } = parseStage(sid);
-  return S.stagesByFull[sid] || S.stagesByCatStatus[(categoryId+':'+statusId)] || { id: sid, name: sid, sort: 0, categoryId };
+  return S.stagesByFull[sid] || S.stagesByCatStatus[(categoryId + ':' + statusId)] || { id: sid, name: sid, sort: 0, categoryId };
 }
 
-function stageUi(item){
+function stageUi(item) {
   const st = getStageObject(item);
   const cid = Number(item.categoryId) || st.categoryId || 0;
 
   const list = (S.cats[cid]?.list || []);
-  // индекс текущей стадии среди (уже) бездубликатного списка
   const idx = Math.max(0, list.findIndex(s => s.id === st.id));
   const steps = list.length > 1 ? (list.length - 1) : 1;
   const pct = Math.round((idx / steps) * 100);
 
-  const opts = list
-    .map(s => `<option value="${s.id}" ${s.id === st.id ? 'selected' : ''}>${s.name}</option>`)
-    .join('');
+  const opts = list.map(s => `<option value="${s.id}" ${s.id === st.id ? 'selected' : ''}>${s.name}</option>`).join('');
 
   return `
     <div class="stage">
@@ -365,64 +358,70 @@ function stageUi(item){
   `;
 }
 
-// ===== фильтрация/сортировка/пагинация
+// Если нужные UF-поля не пришли в list, добираем через crm.item.get
+async function hydrateUFsIfMissing() {
+  const need = [F.dealIdSource, F.licenseKey, F.portalUrl, F.tariff, F.tariffEnd, F.marketEnd, F.product];
+  const missing = S.items.some(it => need.some(code => it[code] === undefined));
+  if (!missing) return;
+
+  const calls = {};
+  S.items.forEach((it, i) => calls['g' + i] = ['crm.item.get', { entityTypeId: S.typeId, id: it.id }]);
+
+  await new Promise(res => BX24.callBatch(calls, rr => {
+    for (const k in rr) {
+      if (rr[k].error()) continue;
+      const full = rr[k].data().item;
+      const idx = S.items.findIndex(x => x.id === full.id);
+      if (idx > -1) Object.assign(S.items[idx], full);
+    }
+    res();
+  }, true));
+}
+
+// --- РЕНДЕР
 function filteredAndSorted() {
   const f = S.filter;
   let arr = S.items.filter(it => {
-    const title = String(it.title || '').toLowerCase();
-    const uid   = Number(it.assignedById) || null;
-    const ass   = uid && S.users[uid] ? S.users[uid].name.toLowerCase() : '';
-    const st    = getStageObject(it).name.toLowerCase();
-
+    const stName = getStageObject(it).name.toLowerCase();
     const deal   = String(UF(it, F.dealIdSource) || '').toLowerCase();
-    const key    = String(UF(it, F.licenseKey)   || '').toLowerCase();
-    const url    = String(UF(it, F.portalUrl)    || '').toLowerCase();
-    const tariff = String(enumText(F.tariff, UF(it, F.tariff)) || '').toLowerCase();
-    const prod   = String(enumText(F.product, UF(it, F.product)) || '').toLowerCase();
+    const key    = String(UF(it, F.licenseKey) || '').toLowerCase();
+    const url    = String(UF(it, F.portalUrl) || '').toLowerCase();
+    const tariff = String(enumText(S.ufEnums, F.tariff, UF(it, F.tariff)) || '').toLowerCase();
+    const prod   = String(enumText(S.ufEnums, F.product, UF(it, F.product)) || '').toLowerCase();
 
-    return (!f.title || title.includes(f.title))
-        && (!f.ass   || ass.includes(f.ass))
-        && (!f.stage || st.includes(f.stage))
-        && (!f.deal  || deal.includes(f.deal))
-        && (!f.key   || key.includes(f.key))
-        && (!f.url   || url.includes(f.url))
-        && (!f.tariff|| tariff.includes(f.tariff))
-        && (!f.product|| prod.includes(f.product));
+    return (!f.stage   || stName.includes(f.stage))
+        && (!f.deal    || deal.includes(f.deal))
+        && (!f.key     || key.includes(f.key))
+        && (!f.url     || url.includes(f.url))
+        && (!f.tariff  || tariff.includes(f.tariff))
+        && (!f.product || prod.includes(f.product));
   });
 
   const dir = S.view.sortDir === 'asc' ? 1 : -1;
   const key = S.view.sortKey;
 
-  arr.sort((x,y) => {
-    const get = (k) => {
-      if (k === 'id')     return (Number(x.id)||0) - (Number(y.id)||0);
-      if (k === 'title')  return String(x.title||'').localeCompare(String(y.title||''), 'ru', { sensitivity:'base' });
-      if (k === 'ass') {
-        const ax = S.users[Number(x.assignedById)]?.name || '';
-        const ay = S.users[Number(y.assignedById)]?.name || '';
-        return ax.localeCompare(ay, 'ru', { sensitivity: 'base' });
-      }
-      if (k === 'stage')  return (getStageObject(x).sort || 0) - (getStageObject(y).sort || 0);
-      if (k === 'dealid') return String(UF(x, F.dealIdSource) || '').localeCompare(String(UF(y, F.dealIdSource) || ''), 'ru', { numeric:true });
-      if (k === 'key')    return String(UF(x, F.licenseKey)   || '').localeCompare(String(UF(y, F.licenseKey)   || ''), 'ru', { sensitivity:'base' });
-      if (k === 'url')    return String(UF(x, F.portalUrl)    || '').localeCompare(String(UF(y, F.portalUrl)    || ''), 'ru', { sensitivity:'base' });
-      if (k === 'tariff') return String(enumText(F.tariff, UF(x, F.tariff)) || '').localeCompare(String(enumText(F.tariff, UF(y, F.tariff)) || ''), 'ru', { sensitivity:'base' });
-      if (k === 'tEnd')   return String(UF(x, F.tariffEnd) || '').localeCompare(String(UF(y, F.tariffEnd) || ''), 'ru', { numeric:true });
-      if (k === 'mEnd')   return String(UF(x, F.marketEnd) || '').localeCompare(String(UF(y, F.marketEnd) || ''), 'ru', { numeric:true });
-      if (k === 'product')return String(enumText(F.product, UF(x, F.product)) || '').localeCompare(String(enumText(F.product, UF(y, F.product)) || ''), 'ru', { sensitivity:'base' });
+  arr.sort((x, y) => {
+    const get = k => {
+      if (k === 'id') return (Number(x.id) || 0) - (Number(y.id) || 0);
+      if (k === 'stage') return (getStageObject(x).sort || 0) - (getStageObject(y).sort || 0);
+      if (k === 'dealid') return String(UF(x, F.dealIdSource) || '').localeCompare(String(UF(y, F.dealIdSource) || ''), 'ru', { numeric: true });
+      if (k === 'url') return String(UF(x, F.portalUrl) || '').localeCompare(String(UF(y, F.portalUrl) || ''), 'ru', { sensitivity: 'base' });
+      if (k === 'tariff') return String(enumText(S.ufEnums, F.tariff, UF(x, F.tariff)) || '').localeCompare(String(enumText(S.ufEnums, F.tariff, UF(y, F.tariff)) || ''), 'ru', { sensitivity: 'base' });
+      if (k === 'tEnd') return String(UF(x, F.tariffEnd) || '').localeCompare(String(UF(y, F.tariffEnd) || ''), 'ru', { numeric: true });
+      if (k === 'mEnd') return String(UF(x, F.marketEnd) || '').localeCompare(String(UF(y, F.marketEnd) || ''), 'ru', { numeric: true });
+      if (k === 'product') return String(enumText(S.ufEnums, F.product, UF(x, F.product)) || '').localeCompare(String(enumText(S.ufEnums, F.product, UF(y, F.product)) || ''), 'ru', { sensitivity: 'base' });
       return 0;
     };
     const v = get(key);
-    return v === 0 ? ((Number(x.id)||0) - (Number(y.id)||0)) * dir : v * dir;
+    return v === 0 ? ((Number(x.id) || 0) - (Number(y.id) || 0)) * dir : v * dir;
   });
 
   if (dir < 0) arr.reverse();
   return arr;
 }
 
-// ====== РЕНДЕР
 function render() {
-  // применяем видимость столбцов (шапка + фильтры)
+  // применяем видимость колонок
   document.querySelectorAll('[data-col]').forEach(th => {
     const key = th.getAttribute('data-col');
     th.style.display = S.cols.includes(key) ? '' : 'none';
@@ -433,118 +432,107 @@ function render() {
     td.style.display = S.cols.includes(key) ? '' : 'none';
   });
 
-  const full  = filteredAndSorted();
+  const full = filteredAndSorted();
   const total = full.length;
   const pages = Math.max(1, Math.ceil(total / S.view.size));
   if (S.view.page > pages) S.view.page = pages;
   const start = (S.view.page - 1) * S.view.size;
   const slice = full.slice(start, start + S.view.size);
 
-  ui.pgInfo.textContent = `${S.view.page}/${pages}`;
+  ui.pgInfo.textContent = S.view.page + '/' + pages;
   ui.pgPrev.disabled = (S.view.page <= 1);
   ui.pgNext.disabled = (S.view.page >= pages);
 
-  if (!slice.length) {
-    ui.rows.innerHTML = '<tr><td colspan="12" class="muted">Ничего не найдено</td></tr>';
-    return;
-  }
+  if (!slice.length) { ui.rows.innerHTML = '<tr><td colspan="12" class="muted">Ничего не найдено</td></tr>'; return; }
 
   ui.rows.innerHTML = '';
   slice.forEach(it => {
     const id = it.id;
-    const title = it.title || ('#' + id);
-    const uid = Number(it.assignedById) || null;
-    const u = uid ? S.users[uid] : null;
-    const assHtml = u ? `<a href="#" onclick="BX24.openPath('/company/personal/user/${uid}/');return false;">${u.name}</a>` : (uid ? ('ID '+uid) : '—');
 
     const stage = stageUi(it);
-    const deal  = UF(it, F.dealIdSource) ?? '—';
-    const key   = UF(it, F.licenseKey)   ?? '—';
-    const urlR  = UF(it, F.portalUrl)    ?? '';
-    const url   = urlR ? `<a href="${urlR}" target="_blank" rel="noopener">${urlR}</a>` : '—';
-    const tariff= enumText(F.tariff,  UF(it, F.tariff));
-    const tEnd  = fmtDate(UF(it, F.tariffEnd));
-    const mEnd  = fmtDate(UF(it, F.marketEnd));
-    const prod  = enumText(F.product, UF(it, F.product));
+
+    const deal = UF(it, F.dealIdSource) ?? '—';
+    const urlR = UF(it, F.portalUrl) ?? '';
+    const url = urlR ? `<a href="${urlR}" target="_blank" rel="noopener">${urlR}</a>` : '—';
+
+    const tariff = enumText(S.ufEnums, F.tariff, UF(it, F.tariff));
+    const tEnd   = fmtDate(UF(it, F.tariffEnd));
+    const mEnd   = fmtDate(UF(it, F.marketEnd));
+    const product = enumText(S.ufEnums, F.product, UF(it, F.product));
 
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td data-col="id">${id}</td>
-      <td class="wrap-title" data-col="title"><a href="#" onclick="BX24.openPath('/crm/type/${SMART_ENTITY_TYPE_ID}/details/${id}/');return false;">${title}</a></td>
-      <td data-col="ass">${assHtml}</td>
-
       <td data-col="stage">${stage}</td>
-      <td data-col="deal">${deal}</td>
-      <td data-col="key">${key}</td>
-      <td data-col="url" class="wrap-title">${url}</td>
+      <td data-col="deal">${deal || '—'}</td>
+      <td data-col="url">${url}</td>
       <td data-col="tariff">${tariff}</td>
       <td data-col="tEnd">${tEnd}</td>
       <td data-col="mEnd">${mEnd}</td>
-      <td data-col="product">${prod}</td>
+      <td data-col="product">${product}</td>
       <td data-col="act">
         <button class="btn" data-open="${id}">Открыть</button>
         <button class="btn" data-del="${id}">Удалить</button>
       </td>
     `;
-    // видимость столбцов на строке
+    // предустановленная видимость
     tr.querySelectorAll('[data-col]').forEach(td => {
       const key = td.getAttribute('data-col');
       td.style.display = S.cols.includes(key) ? '' : 'none';
     });
+
     ui.rows.appendChild(tr);
   });
 
-  // события на действия
-  ui.rows.querySelectorAll('[data-open]').forEach(n => n.onclick = () => BX24.openPath(`/crm/type/${SMART_ENTITY_TYPE_ID}/details/${n.getAttribute('data-open')}/`));
+  // события
+  ui.rows.querySelectorAll('[data-open]').forEach(n =>
+    n.onclick = () => BX24.openPath(`/crm/type/${S.typeId}/details/${n.getAttribute('data-open')}/`)
+  );
+
   ui.rows.querySelectorAll('.stageSel').forEach(sel => {
-  sel.onchange = () => {
-    const newStageId = sel.value;
-    const itemId = Number(sel.getAttribute('data-item'));
-
-    BX24.callMethod('crm.item.update', { entityTypeId: S.typeId, id: itemId, fields: { stageId: newStageId } }, r => {
-      if (r.error()){
-        alert('Ошибка смены стадии: ' + r.error_description());
-        sel.value = sel.getAttribute('data-cur');
-        return;
-      }
-      const it = S.items.find(i => i.id === itemId);
-      if (it) it.stageId = newStageId; // обновим локально
-      render();
-    });
-  };
-});
-  ui.rows.querySelectorAll('[data-del]').forEach(b => b.onclick = () => detach(Number(b.getAttribute('data-del'))));
-}
-
-// ===== сохранение связей в сделке
-function save(next) {
-  const f = {}; f[S.field] = next;
-  BX24.callMethod('crm.deal.update', { id: S.dealId, fields: f }, r => {
-    if (r.error()) { alert('Ошибка: ' + r.error_description()); }
-    load();
+    sel.onchange = () => {
+      const newStageId = sel.value;
+      const itemId = Number(sel.getAttribute('data-item'));
+      BX24.callMethod('crm.item.update', { entityTypeId: S.typeId, id: itemId, fields: { stageId: newStageId } }, r => {
+        if (r.error()) {
+          alert('Ошибка смены стадии: ' + r.error_description());
+          sel.value = sel.getAttribute('data-cur');
+          return;
+        }
+        const it = S.items.find(i => i.id === itemId);
+        if (it) it.stageId = newStageId; // локально обновим
+        render();
+      });
+    };
   });
-}
-function attach(ids) {
-  if (S.mode === 'bindings') {
-    const add = ids.map(id => bcode(S.typeId, id));
-    save(Array.from(new Set([...(S.bindings || []), ...add])));
-  } else {
-    save(Array.from(new Set([...(A(S.bindings).map(Number)), ...ids])));
-  }
-}
-function detach(id) {
-  if (S.mode === 'bindings') {
-    const code = bcode(S.typeId, id);
-    save((S.bindings || []).filter(c => c !== code));
-  } else {
-    save(A(S.bindings).map(Number).filter(v => v !== id));
-  }
+
+  ui.rows.querySelectorAll('[data-del]').forEach(b =>
+    b.onclick = () => detach(Number(b.getAttribute('data-del')))
+  );
 }
 
-// ===== перетаскивание ширины колонок
+// --- Колонки: модалка
+function openCols() {
+  ui.colList.innerHTML = '';
+  const all = ['stage', 'deal', 'url', 'tariff', 'tEnd', 'mEnd', 'product', 'act'];
+  const labels = {
+    stage: 'Стадия', deal: 'ID исходной сделки', url: 'Адрес портала',
+    tariff: 'Текущий тариф', tEnd: 'Окончание тарифа', mEnd: 'Окончание подписки',
+    product: 'Продукт', act: 'Действия'
+  };
+  all.forEach(k => {
+    const id = 'col_' + k;
+    const row = document.createElement('label');
+    row.innerHTML = `<input type="checkbox" id="${id}" ${S.cols.includes(k) ? 'checked' : ''}> ${labels[k] || k}`;
+    ui.colList.appendChild(row);
+  });
+  ui.colModal.style.display = 'flex';
+}
+function closeCols() { ui.colModal.style.display = 'none'; }
+
+// --- Ресайзеры ширины
 function enableResizers() {
   document.querySelectorAll('th .resizer').forEach(handle => {
-    const th  = handle.parentElement;
+    const th = handle.parentElement;
     const key = th.getAttribute('data-col');
     let startX, startW;
     handle.onmousedown = e => {
@@ -556,29 +544,17 @@ function enableResizers() {
         S.widths[key] = th.style.width;
       };
       document.onmouseup = () => {
-        document.onmousemove = null; document.onmouseup = null;
+        document.onmousemove = null;
+        document.onmouseup = null;
         th.classList.remove('resizing');
-        localStorage.setItem('widths_v2', JSON.stringify(S.widths));
+        localStorage.setItem('widths_v1', JSON.stringify(S.widths));
       };
     };
   });
 }
 
-// ===== Модал «Колонки»
-function openCols() {
-  ui.colList.innerHTML = '';
-  COLS_ALL.forEach(k => {
-    const id = 'col_' + k;
-    const row = document.createElement('label');
-    row.innerHTML = `<input type="checkbox" id="${id}" ${S.cols.includes(k) ? 'checked' : ''}> ${COL_LABEL[k] || k}`;
-    ui.colList.appendChild(row);
-  });
-  ui.colModal.style.display = 'flex';
-}
-function closeCols() { ui.colModal.style.display = 'none'; }
-
-// ===== Пикер выбора элементов
-const PK = { page:0, pageSize:50, query:'', total:0, selected:new Set(), loading:false };
+// --- ПИКЕР «Выбрать элемент» (без изменений логики)
+const PK = { page: 0, pageSize: 50, query: '', total: 0, selected: new Set(), loading: false };
 function openPicker() {
   const modal = document.createElement('div');
   modal.className = 'modal'; modal.style.display = 'flex';
@@ -611,37 +587,34 @@ function openPicker() {
 
   const q = modal.querySelector('#q');
   const pickRows = modal.querySelector('#pickRows');
-  const pickAll  = modal.querySelector('#pickAll');
-  const btnSearch= modal.querySelector('#btnSearch');
+  const pickAll = modal.querySelector('#pickAll');
+  const btnSearch = modal.querySelector('#btnSearch');
   const btnReset = modal.querySelector('#btnReset');
-  const btnMore  = modal.querySelector('#btnMore');
+  const btnMore = modal.querySelector('#btnMore');
   const btnClose = modal.querySelector('#btnClose');
-  const btnAttach= modal.querySelector('#btnAttach');
-  const info     = modal.querySelector('#pgInfoPick');
+  const btnAttach = modal.querySelector('#btnAttach');
+  const info = modal.querySelector('#pgInfoPick');
 
-  function loadPage(reset=false) {
+  function loadPage(reset = false) {
     if (PK.loading) return; PK.loading = true;
-    if (reset) { PK.page=0; PK.total=0; pickRows.innerHTML = '<tr><td colspan="3" class="muted" style="padding:10px 12px">Загрузка…</td></tr>'; }
+    if (reset) { PK.page = 0; PK.total = 0; pickRows.innerHTML = '<tr><td colspan="3" class="muted" style="padding:10px 12px">Загрузка…</td></tr>'; }
     const start = PK.page * PK.pageSize;
     const filter = PK.query ? { '%title': PK.query } : {};
-    BX24.callMethod('crm.item.list', {
-      entityTypeId: S.typeId, filter, order: { 'id': 'DESC' }, select: ['id','title'], start
-    }, r => {
+    BX24.callMethod('crm.item.list', { entityTypeId: S.typeId, filter, order: { 'id': 'DESC' }, select: ['id', 'title'], start }, r => {
       PK.loading = false;
       if (r.error()) { pickRows.innerHTML = `<tr><td colspan="3" class="err" style="padding:10px 12px">${r.error_description()}</td></tr>`; return; }
       const items = r.data().items || [];
       if (reset) pickRows.innerHTML = '';
-      if (!items.length && reset) { pickRows.innerHTML = '<tr><td colspan="3" class="muted" style="padding:10px 12px">Ничего не найдено</td></tr>'; info.textContent=''; return; }
+      if (!items.length && reset) { pickRows.innerHTML = '<tr><td colspan="3" class="muted" style="padding:10px 12px">Ничего не найдено</td></tr>'; info.textContent = ''; return; }
       items.forEach(it => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td style="border-bottom:1px solid var(--line);padding:10px 12px"><input type="checkbox" data-id="${it.id}"></td>
-                        <td style="border-bottom:1px solid var(--line);padding:10px 12px">${it.id}</td>
-                        <td style="border-bottom:1px solid var(--line);padding:10px 12px">${it.title || ('#'+it.id)}</td>`;
+        tr.innerHTML = `<td style="border-bottom:1px solid var(--line);padding:10px 12px"><input type="checkbox" data-id="${it.id}"></td><td style="border-bottom:1px solid var(--line);padding:10px 12px">${it.id}</td><td style="border-bottom:1px solid var(--line);padding:10px 12px">${it.title || ('#' + it.id)}</td>`;
         pickRows.appendChild(tr);
       });
       PK.total += items.length; info.textContent = 'Показано: ' + PK.total; PK.page++;
     });
   }
+
   pickAll.onchange = () => {
     pickRows.querySelectorAll('input[type="checkbox"][data-id]').forEach(ch => {
       ch.checked = pickAll.checked;
@@ -656,63 +629,56 @@ function openPicker() {
       if (t.checked) PK.selected.add(id); else PK.selected.delete(id);
     }
   });
-  btnMore.onclick  = () => loadPage(false);
-  btnSearch.onclick= () => { PK.query = q.value.trim(); loadPage(true); };
-  btnReset.onclick = () => { q.value=''; PK.query=''; loadPage(true); };
+
+  btnMore.onclick = () => loadPage(false);
+  btnSearch.onclick = () => { PK.query = q.value.trim(); loadPage(true); };
+  btnReset.onclick = () => { q.value = ''; PK.query = ''; loadPage(true); };
   btnClose.onclick = () => { modal.remove(); };
-  btnAttach.onclick= () => { const ids = Array.from(PK.selected); if (ids.length) attach(ids); modal.remove(); };
+  btnAttach.onclick = () => { const ids = Array.from(PK.selected); if (ids.length) attach(ids); modal.remove(); };
 
   loadPage(true);
 }
 
-// ===== события
-ui.ref.onclick      = load;
-ui.create.onclick   = () => BX24.openPath(`/crm/type/${SMART_ENTITY_TYPE_ID}/details/0/`);
-ui.pick.onclick     = openPicker;
-ui.colsBtn.onclick  = openCols;
-
+// --- Слушатели
+ui.ref.onclick = load;
+ui.create.onclick = () => BX24.openPath(`/crm/type/${S.typeId}/details/0/`);
+ui.pick.onclick = openPicker;
+ui.colsBtn.onclick = openCols;
+ui.colCancel.onclick = () => (ui.colModal.style.display = 'none');
+ui.colApply.onclick = () => {
+  const boxes = [...ui.colList.querySelectorAll('input[type="checkbox"]')];
+  const list = boxes.filter(b => b.checked).map(b => b.id.replace('col_', ''));
+  if (!list.length) return;
+  S.cols = list; localStorage.setItem('cols_v1', JSON.stringify(S.cols));
+  ui.colModal.style.display = 'none'; render(); fit();
+};
 ui.pageSize.onchange = () => { S.view.size = Number(ui.pageSize.value) || 10; S.view.page = 1; render(); fit(); };
-ui.pgPrev.onclick    = () => { if (S.view.page > 1) { S.view.page--; render(); fit(); } };
-ui.pgNext.onclick    = () => { const pages = Math.max(1, Math.ceil(filteredAndSorted().length / S.view.size)); if (S.view.page < pages) { S.view.page++; render(); fit(); } };
+ui.pgPrev.onclick = () => { if (S.view.page > 1) { S.view.page--; render(); fit(); } };
+ui.pgNext.onclick = () => { const pages = Math.max(1, Math.ceil(filteredAndSorted().length / S.view.size)); if (S.view.page < pages) { S.view.page++; render(); fit(); } };
 
-[ui.fTitle, ui.fAss, ui.fStage, ui.fDeal, ui.fKey, ui.fUrl, ui.fTariff, ui.fProduct].forEach(inp => {
-  if (!inp) return;
-  inp.addEventListener('input', () => {
-    S.filter = {
-      title: (ui.fTitle?.value || '').toLowerCase(),
-      ass:   (ui.fAss?.value   || '').toLowerCase(),
-      stage: (ui.fStage?.value || '').toLowerCase(),
-      deal:  (ui.fDeal?.value  || '').toLowerCase(),
-      key:   (ui.fKey?.value   || '').toLowerCase(),
-      url:   (ui.fUrl?.value   || '').toLowerCase(),
-      tariff:(ui.fTariff?.value|| '').toLowerCase(),
-      product:(ui.fProduct?.value|| '').toLowerCase(),
-    };
-    S.view.page = 1; render(); fit();
-  });
-});
+// фильтры
+[ui.fStage, ui.fDeal, ui.fUrl, ui.fKey, ui.fTariff, ui.fProduct].forEach(inp => inp && inp.addEventListener('input', () => {
+  S.filter = {
+    stage: (ui.fStage?.value || '').toLowerCase(),
+    deal:  (ui.fDeal?.value || '').toLowerCase(),
+    url:   (ui.fUrl?.value  || '').toLowerCase(),
+    key:   (ui.fKey?.value  || '').toLowerCase(),
+    tariff:(ui.fTariff?.value|| '').toLowerCase(),
+    product:(ui.fProduct?.value|| '').toLowerCase(),
+  };
+  S.view.page = 1; render(); fit();
+}));
 
-// Сортировка по клику на заголовок
+// сортировка по клику на заголовок
 ui.head.addEventListener('click', e => {
   const th = e.target.closest('th[data-col]');
   if (!th || e.target.classList.contains('resizer')) return;
-  const map = { deal:'dealid', key:'key', url:'url', tariff:'tariff', tEnd:'tEnd', mEnd:'mEnd', product:'product' };
+  const map = { deal: 'dealid', url: 'url', tariff: 'tariff', tEnd: 'tEnd', mEnd: 'mEnd', product: 'product' };
   const key = th.getAttribute('data-col');
-  const sortKey = ({ id:'id', title:'title', ass:'ass', stage:'stage', act:'id' })[key] || map[key] || 'id';
+  const sortKey = ({ stage: 'stage', act: 'id' })[key] || map[key] || 'id';
   S.view.sortKey === sortKey ? (S.view.sortDir = S.view.sortDir === 'asc' ? 'desc' : 'asc') : (S.view.sortKey = sortKey, S.view.sortDir = 'asc');
   render(); fit();
 });
 
-// Колонки — применение/закрытие
-ui.colCancel.onclick = closeCols;
-ui.colApply.onclick  = () => {
-  const boxes = [...ui.colList.querySelectorAll('input[type="checkbox"]')];
-  const list = boxes.filter(b => b.checked).map(b => b.id.replace('col_', ''));
-  if (!list.length) return;
-  S.cols = list;
-  localStorage.setItem('cols_v2', JSON.stringify(S.cols));
-  closeCols(); render(); fit();
-};
-
-// включаем ручки ресайза
+// ресайзеры
 enableResizers();
