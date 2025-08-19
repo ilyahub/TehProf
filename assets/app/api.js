@@ -36,56 +36,113 @@ function normalizeId(v, smartTypeId) {
   return null;
 }
 
+import { A } from './utils.js';
+
+// …ваши bx.call / getDeal и прочее остаются как есть …
+
 /**
- * Возвращает ID связанных смарт-элементов (typeId) для сделки.
- * Ничего не знаем о коде поля — просто сканируем все поля сделки и вытягиваем
- * все встреченные значения вида DYNAMIC_<typeId>_<id> или голые числа.
- *
- * @param {number} dealId
- * @param {null|undefined|string} _fieldCode  // игнорируется (оставлен для совместимости)
- * @param {number} smartTypeId
- * @return {Promise<number[]>}
+ * Достаёт ID связанных смарт-элементов из сделки.
+ * 1) Пытается прочитать из конкретного UF-поля (fieldCode).
+ * 2) Если не нашли — сканирует все поля сделки.
+ * Понимает форматы:
+ *  - число / массив чисел
+ *  - строка с числами ("12, 13;14 15")
+ *  - JSON-массив/объекты [{id:123},{ID:124}] или bindings
+ *  - строки вида "DYNAMIC_1032_123"
  */
-export async function getLinkedItemIds(dealId, _fieldCode, smartTypeId) {
-  const r = await bx.call('crm.deal.get', { id: dealId });
-  if (r.error()) return [];
+export async function getLinkedItemIds(dealId, fieldCode /* string | null */, smartTypeId) {
+  const deal = await getDeal(dealId);
+  if (!deal) return [];
 
-  const deal = r.data() || {};
-  const out = new Set();
+  const ids = new Set();
 
-  const collect = (val) => {
-    if (val == null) return;
-    if (Array.isArray(val)) {
-      val.forEach(collect);
+  // 1) попробовать строгое поле (в 3 регистрах на всякий случай)
+  if (fieldCode) {
+    const candidates = [
+      deal[fieldCode],
+      deal[String(fieldCode).toUpperCase()],
+      deal[String(fieldCode).toLowerCase()],
+    ];
+    for (const val of candidates) parseAny(val, smartTypeId, ids);
+  }
+
+  // 2) если ничего не нашли — обойти все поля сделки (надёжный фолбэк)
+  if (ids.size === 0) {
+    for (const k in deal) parseAny(deal[k], smartTypeId, ids);
+  }
+
+  return Array.from(ids);
+}
+
+// ==== helpers ===============================================================
+
+function parseAny(val, smartTypeId, out /* Set */) {
+  if (val == null || val === '') return;
+
+  // Число
+  if (typeof val === 'number' && val > 0) {
+    out.add(val);
+    return;
+  }
+
+  // Строка
+  if (typeof val === 'string') {
+    const s = val.trim();
+    if (!s) return;
+
+    // JSON?
+    if ((s.startsWith('[') && s.endsWith(']')) || (s.startsWith('{') && s.endsWith('}'))) {
+      try {
+        const j = JSON.parse(s);
+        parseAny(j, smartTypeId, out);
+        return;
+      } catch { /* ignore */ }
+    }
+
+    // "DYNAMIC_1032_123" или просто «123, 124»
+    const parts = s.split(/[\s,;]+/).filter(Boolean);
+    for (const p of parts) {
+      const m = p.match(/^DYNAMIC_(\d+)_(\d+)$/i);
+      if (m) {
+        if (Number(m[1]) === Number(smartTypeId)) out.add(Number(m[2]));
+        continue;
+      }
+      const n = Number(p.replace(/[^\d]/g, ''));
+      if (n > 0) out.add(n);
+    }
+    return;
+  }
+
+  // Массив
+  if (Array.isArray(val)) {
+    for (const x of val) parseAny(x, smartTypeId, out);
+    return;
+  }
+
+  // Объект: {id:123} / {ID:123} / {entityTypeId, id} / {bindings:[...]}
+  if (typeof val === 'object') {
+    // bindings как в некоторых UF
+    if (Array.isArray(val.bindings)) {
+      for (const b of val.bindings) {
+        const et = b.entityTypeId ?? b.ENTITY_TYPE_ID;
+        const id = b.id ?? b.ID;
+        if (Number(et) === Number(smartTypeId) && Number(id) > 0) out.add(Number(id));
+      }
       return;
     }
-    if (typeof val === 'number') {
-      const id = normalizeId(val, smartTypeId);
-      if (id) out.add(id);
-      return;
-    }
-    const s = String(val);
-    // если одна строка — разбиваем по разделителям
-    s.split(/[,\s;]+/)
-      .map(x => x.trim())
-      .filter(Boolean)
-      .forEach(x => {
-        const id = normalizeId(x, smartTypeId);
-        if (id) out.add(id);
-      });
-  };
 
-  // пробегаем ВСЕ поля сделки (особенно UF_*)
-  for (const k in deal) {
-    const v = deal[k];
-    if (v == null) continue;
-    // интерес представляют строки/числа/массивы, чаще это UF_* поля
-    if (k.startsWith('UF_') || Array.isArray(v) || typeof v === 'string' || typeof v === 'number') {
-      collect(v);
+    // одиночные варианты
+    const id1 = val.id ?? val.ID ?? val.value ?? val.VALUE;
+    const et1 = val.entityTypeId ?? val.ENTITY_TYPE_ID;
+    if (id1 != null) {
+      if (et1 == null || Number(et1) === Number(smartTypeId)) {
+        const n = Number(String(id1).replace(/[^\d]/g, ''));
+        if (n > 0) out.add(n);
+      }
     }
   }
-  return Array.from(out);
 }
+
 
 
 /**
