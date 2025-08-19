@@ -1,5 +1,10 @@
 // assets/app/main.js
-// Работает вместе с utils.js, api.js, config.js
+// Работает c utils.js, api.js, config.js
+
+// BX24 fallback: если открыто в iframe Bitrix24
+if (typeof window.BX24 === 'undefined' && window.parent && window.parent.BX24) {
+  window.BX24 = window.parent.BX24;
+}
 
 import {
   $, $$, A, J, pick, fmtDate,
@@ -101,7 +106,6 @@ function showDiag(msg, extra) {
 
 /* -------------------- UF / Users / Stages ------------------ */
 
-// ВАЖНО: строим карту UF_CRM_* -> ufCrm* по данным REST (без угадываний)
 async function buildUFEnums() {
   const list = await listUserFields(SMART_ENTITY_TYPE_ID);
   list.forEach(f => {
@@ -145,7 +149,8 @@ async function buildStages(items) {
       const name       = String(pick(st,'name','NAME') || statusId);
       const sort       = Number(pick(st,'sort','SORT') || 0);
       const categoryId = Number(pick(st,'categoryId','CATEGORY_ID') || 0);
-      const fullId     = String(pick(st,'id','ID') || (categoryId ? `DT${SMART_ENTITY_TYPE_ID}_${categoryId}:${statusId}` : statusId));
+      const fullId     = String(pick(st,'id','ID') ||
+        (categoryId ? `DT${SMART_ENTITY_TYPE_ID}_${categoryId}:${statusId}` : statusId));
       const obj = { id: fullId, name, sort, categoryId, statusId };
 
       S.stagesByFull[fullId] = obj;
@@ -156,7 +161,7 @@ async function buildStages(items) {
     });
   });
 
-  // дедуп по id внутри категории + сортировка
+  // дедуп + сортировка
   Object.keys(S.catStages).forEach(cid => {
     const byId = {};
     S.catStages[cid].forEach(s => { byId[s.id] = byId[s.id] || s; });
@@ -183,7 +188,6 @@ async function load() {
       return;
     }
 
-    // 1) связанные IDs из поля сделки
     const ids = await getLinkedItemIds(S.dealId, DEAL_FIELD_CODE, SMART_ENTITY_TYPE_ID);
     S.ids = ids;
 
@@ -192,7 +196,6 @@ async function load() {
       fit(); return;
     }
 
-    // 2) сами элементы (надёжно)
     const select = [
       'id', 'title', 'stageId', 'categoryId', 'assignedById',
       F.dealIdSource, F.licenseKey, F.portalUrl,
@@ -276,7 +279,6 @@ function filteredAndSorted() {
 /* -------------------------- Render ------------------------- */
 
 function render() {
-  // Применяем видимость/ширину на заголовки/фильтры
   document.querySelectorAll('[data-col]').forEach(th => {
     const key = th.getAttribute('data-col');
     th.style.display = S.cols.includes(key) ? '' : 'none';
@@ -367,7 +369,6 @@ function render() {
     ui.rows.appendChild(tr);
   });
 
-  // события
   ui.rows.querySelectorAll('[data-open]').forEach(n => n.onclick = () => {
     const id = n.getAttribute('data-open');
     BX24.openPath(`/crm/type/${SMART_ENTITY_TYPE_ID}/details/${id}/`);
@@ -420,7 +421,6 @@ ui.pgNext && (ui.pgNext.onclick = () => {
 
 ui.btnRefresh && (ui.btnRefresh.onclick = () => load());
 ui.btnCreate  && (ui.btnCreate.onclick  = () => BX24.openPath(`/crm/type/${SMART_ENTITY_TYPE_ID}/details/0/`));
-// ui.btnPick / ui.btnCols — подключайте при необходимости
 
 ;[ui.fTitle, ui.fAss, ui.fStage, ui.fDeal, ui.fKey, ui.fUrl, ui.fTariff, ui.fProduct]
   .filter(Boolean).forEach(inp => inp.addEventListener('input', () => {
@@ -440,25 +440,29 @@ ui.btnCreate  && (ui.btnCreate.onclick  = () => BX24.openPath(`/crm/type/${SMART
 /* ------------------------ Bootstrap ------------------------ */
 
 function detectDealId() {
-  // 1) PLACEMENT_OPTIONS
   try {
     const p = BX24.getParam('PLACEMENT_OPTIONS');
     const j = J(p || '{}');
     if (j && j.ID) return Number(j.ID);
   } catch {}
-
-  // 2) Query (?dealId=... | ?id=...)
   try {
     const url = new URL(location.href);
     const qId = url.searchParams.get('dealId') || url.searchParams.get('id') || url.searchParams.get('ID');
     if (qId) return Number(qId);
   } catch {}
-
   return null;
 }
 
 function onReady() {
-  if (!window.BX24) { setTimeout(onReady, 150); return; }
+  // слушатели навешиваем сразу (чтобы кнопки живые даже до загрузки)
+  if (ui.btnRefresh) ui.btnRefresh.onclick = () => load();
+  if (ui.btnCreate)  ui.btnCreate.onclick  = () => BX24.openPath(`/crm/type/${SMART_ENTITY_TYPE_ID}/details/0/`);
+
+  if (!window.BX24 || !BX24.getAuth) {
+    // попробуем позже — когда SDK появится
+    setTimeout(onReady, 200);
+    return;
+    }
   try {
     BX24.init(() => {
       S.dealId = detectDealId();
@@ -466,7 +470,6 @@ function onReady() {
       load();
     });
   } catch {
-    // Вне портала: позволяем тестировать по ?dealId=
     S.dealId = detectDealId();
     if (ui.pageSize) S.view.size = Number(ui.pageSize.value) || 10;
     load();
