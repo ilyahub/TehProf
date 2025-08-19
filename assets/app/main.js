@@ -20,7 +20,7 @@ import {
   updateItemStage
 } from './api.js';
 
-import { F, SMART_ENTITY_TYPE_ID, DEAL_FIELD_CODE } from './config.js';
+import { F, SMART_ENTITY_TYPE_ID } from './config.js';
 
 /* -------------------------- State -------------------------- */
 
@@ -188,7 +188,7 @@ async function load() {
       return;
     }
 
-    const ids = await getLinkedItemIds(S.dealId, DEAL_FIELD_CODE, SMART_ENTITY_TYPE_ID);
+    const ids = await getLinkedItemIds(S.dealId, null, SMART_ENTITY_TYPE_ID);
     S.ids = ids;
 
     if (!ids.length) {
