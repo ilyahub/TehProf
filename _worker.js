@@ -1,165 +1,727 @@
-// _worker.js — Cloudflare Pages Functions (Bitrix24 виджет «Лицензии»)
-
 export default {
-  async fetch(request) {
-    return new Response(HTML, {
-      headers: { "content-type": "text/html; charset=UTF-8", "cache-control": "no-store" }
+  async fetch(request, env, ctx) {
+    const html = `<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<title>Лицензии</title>
+<link rel="preconnect" href="https://api.bitrix24.com">
+<style>
+  :root{
+    --gap:12px;
+    --radius:10px;
+    --line:#eceff2;
+    --text:#1d2129;
+    --muted:#6b7280;
+    --primary:#3bc8f5;
+    --primary-700:#12b1e3;
+    --primary-600:#3eddff;
+    --bg:#f6f8fb;
+    --card:#fff;
+  }
+  html,body{height:100%;}
+  body{
+    margin:0;
+    font:14px/1.45 Inter,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue","Noto Sans","Apple Color Emoji","Segoe UI Emoji",sans-serif;
+    color:var(--text);
+    background:var(--bg);
+  }
+  .app{
+    display:flex;
+    flex-direction:column;
+    height:100vh;
+    padding:20px;
+    box-sizing:border-box;
+  }
+  .toolbar{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    margin-bottom:12px;
+  }
+  .title{
+    font-size:26px;
+    font-weight:700;
+    margin-right:auto;
+  }
+  .btn{
+    appearance:none;
+    border:1px solid var(--primary);
+    background:var(--primary);
+    color:#fff;
+    padding:9px 14px;
+    border-radius:8px;
+    cursor:pointer;
+    transition:filter .15s ease, background .15s ease, border-color .15s ease;
+    font-weight:600;
+  }
+  .btn.secondary{
+    background:#fff;
+    color:var(--text);
+    border-color:#cfd6df;
+  }
+  .btn:hover{filter:brightness(1.02)}
+  .btn:active{filter:brightness(.96)}
+  .toolbar .right{
+    margin-left:auto;
+    display:flex;
+    align-items:center;
+    gap:8px;
+  }
+  .perpage{
+    display:flex;align-items:center;gap:8px;color:var(--muted)
+  }
+  .perpage select{padding:6px 8px;border:1px solid #cfd6df;border-radius:8px;background:#fff}
+
+  .card{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:12px;
+    display:flex;
+    flex-direction:column;
+    min-height:0;
+  }
+
+  .table-wrap{
+    min-height:0;
+    height:calc(100vh - 130px);
+    overflow:auto;
+    border-top:1px solid var(--line);
+  }
+  table{
+    width:100%;
+    border-collapse:separate;
+    border-spacing:0;
+  }
+  thead th{
+    position:sticky;top:0;z-index:3;
+    background:var(--card);
+    border-bottom:1px solid var(--line);
+    text-align:left;
+    font-weight:700;
+    padding:12px;
+  }
+  tbody td{
+    border-bottom:1px solid var(--line);
+    padding:10px 12px;
+    vertical-align:middle;
+  }
+  tbody tr:hover{background:#fafcff}
+
+  .muted{color:var(--muted)}
+  .link{color:#1677ff;cursor:pointer;text-decoration:none}
+  .tag{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:999px;border:1px solid #e5e8f0;background:#fafbff}
+  .row-actions{display:flex;gap:6px}
+  .btn-sm{padding:6px 10px;border-radius:7px;font-size:13px}
+  .pill{
+    display:inline-block;min-width:120px;height:8px;background:#edf2f7;border-radius:999px;position:relative;overflow:hidden;
+  }
+  .pill .bar{position:absolute;left:0;top:0;bottom:0;width:0;background:#a0aec0;transition:width .25s ease}
+  .stage-name{font-weight:600}
+  .filters{
+    display:grid;
+    grid-template-columns: 1.2fr .8fr .8fr .9fr .8fr .8fr 1fr .7fr 120px;
+    gap:8px;
+    align-items:center;
+    padding:12px;
+  }
+  .filters input, .filters select{
+    width:100%;
+    box-sizing:border-box;
+    padding:8px 10px;
+    border:1px solid #cfd6df;border-radius:8px;background:#fff
+  }
+  .col-hidden{display:none}
+  /* модалка выбора */
+  .modal{
+    position:fixed;inset:0;background:rgba(16,24,40,.45);display:none;align-items:center;justify-content:center;z-index:1000;
+  }
+  .modal.show{display:flex}
+  .modal-card{
+    width:min(860px,95vw);
+    background:#fff;border-radius:14px;border:1px solid var(--line);
+    box-shadow:0 20px 40px rgba(16,24,40,.2);
+    overflow:hidden;
+    display:flex;flex-direction:column;
+    max-height:85vh;
+  }
+  .modal-head{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+  .modal-head .title{font-size:18px;margin:0}
+  .modal-body{padding:14px 16px;overflow:auto}
+  .modal-foot{padding:14px 16px;border-top:1px solid var(--line);display:flex;gap:8px;justify-content:flex-end}
+  .list{display:grid;gap:8px}
+  .list .itm{display:flex;align-items:center;gap:12px;padding:8px;border:1px solid #e7ecf3;border-radius:10px}
+  .w100{width:100%}
+  .danger{background:#fff;border-color:#ff6e6e;color:#b42323}
+  .danger:hover{background:#ffecec}
+  .ghost{background:#fff;border-color:#cfd6df}
+  .ghost:hover{background:#fafbff}
+  .switcher{display:flex;gap:10px}
+  .switcher label{display:flex;align-items:center;gap:6px}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="toolbar">
+    <div class="title">Лицензии</div>
+    <button id="btnNew" class="btn" title="Открыть форму создания элемента">Новый элемент</button>
+    <button id="btnPick" class="btn secondary" title="Добавить существующие элементы">Выбрать элемент</button>
+    <button id="btnRefresh" class="btn secondary">Обновить</button>
+    <button id="btnCols" class="btn ghost">Колонки</button>
+    <div class="right perpage">
+      <span>Показывать по:</span>
+      <select id="perPage">
+        <option value="10">10</option>
+        <option value="30">30</option>
+        <option value="50">50</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="filters" id="filters">
+      <input id="f_title" placeholder="Фильтр по названию">
+      <input id="f_key" placeholder="Ключ">
+      <input id="f_portal" placeholder="Адрес портала">
+      <select id="f_tariff"><option value="">Тариф</option></select>
+      <input id="f_endT" type="date" placeholder="Окончание тарифа">
+      <input id="f_endM" type="date" placeholder="Окончание подписки">
+      <select id="f_product"><option value="">Продукт</option></select>
+      <select id="f_stage"><option value="">Стадия</option></select>
+      <div></div>
+    </div>
+
+    <div class="table-wrap">
+      <table id="grid">
+        <thead>
+        <tr id="thead">
+          <th data-col="stage">Стадия</th>
+          <th data-col="dealId">ID исходной сделки</th>
+          <th data-col="licKey">Лицензионный ключ</th>
+          <th data-col="portal">Адрес портала</th>
+          <th data-col="tariff">Текущий тариф</th>
+          <th data-col="endT">Окончание тарифа</th>
+          <th data-col="endM">Окончание подписки</th>
+          <th data-col="product">Продукт</th>
+          <th data-col="actions">Действия</th>
+        </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- модалка выбора -->
+<div class="modal" id="dlgPick">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div class="title">Выбор элементов</div>
+      <input id="pickSearch" class="w100" placeholder="Поиск по названию">
+    </div>
+    <div class="modal-body">
+      <div id="pickList" class="list"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" id="btnPickClose">Отмена</button>
+      <button class="btn" id="btnPickApply">Добавить</button>
+    </div>
+  </div>
+</div>
+
+<!-- модалка колонок -->
+<div class="modal" id="dlgCols">
+  <div class="modal-card">
+    <div class="modal-head"><div class="title">Настройка колонок</div></div>
+    <div class="modal-body">
+      <div class="switcher" id="colsSwitch"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" id="btnColsClose">Отмена</button>
+      <button class="btn" id="btnColsSave">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://api.bitrix24.com/api/v1/"></script>
+<script>
+(() => {
+  // ====== Константы / UF коды / настройки ======
+  const ENTITY_TYPE_ID = 1032;                   // ваш смарт-процесс
+  const DEAL_LINK_FIELD = 'UF_CRM_1755533553';   // поле связи в сделке (мульти)
+  const UF = {
+    DEAL_ID:    'ufCrm_10_1717328665682',        // ✅ исправлено согласно дампу
+    LIC_KEY:    'ufCrm_10_1717328730625',
+    PORTAL_URL: 'ufCrm_10_1717328814784',
+    TARIFF:     'ufCrm_10_1717329015552',
+    END_TARIFF: 'ufCrm_10_1717329087589',
+    END_MARKET: 'ufCrm_10_1717329109963',
+    PRODUCT:    'ufCrm_10_1717329453779'
+  };
+
+  // состояние
+  const state = {
+    dealId: null,
+    linkedIds: new Set(),
+    items: [],
+    perPage: Number(localStorage.getItem('perPage') || '10'),
+    page: 1,
+    fields: null,
+    enums: { tariff: new Map(), product: new Map() },
+    stagesByCat: new Map(), // categoryId -> [ stage objects {ID, NAME, SORT} ]
+    stageMap: new Map(),     // id -> stage obj
+    stageList: [],           // для селекта фильтра
+    cols: JSON.parse(localStorage.getItem('cols') || '{"stage":true,"dealId":true,"licKey":true,"portal":true,"tariff":true,"endT":true,"endM":true,"product":true,"actions":true}')
+  };
+
+  const $ = (sel, root=document) => root.querySelector(sel);
+  const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
+  const on = (el, ev, fn) => el.addEventListener(ev, fn);
+
+  // ====== Инициализация ======
+  document.addEventListener('DOMContentLoaded', () => {
+    $('#perPage').value = String(state.perPage);
+    // кнопки
+    on($('#btnNew'), openCreate);
+    on($('#btnPick'), openPicker);
+    on($('#btnRefresh'), refresh);
+    on($('#btnCols'), openCols);
+    on($('#perPage'), (e)=>{state.perPage=Number(e.target.value); localStorage.setItem('perPage', state.perPage); render();});
+
+    // фильтры
+    ['f_title','f_key','f_portal','f_tariff','f_endT','f_endM','f_product','f_stage']
+      .forEach(id => on($('#'+id),'input', debounce(render,300)));
+
+    // модалка выбора
+    on($('#btnPickClose'), ()=>closeModal('#dlgPick'));
+    on($('#pickSearch'),'input', debounce(loadPickList,350));
+    on($('#btnPickApply'), applyPicked);
+
+    // Колонки
+    on($('#btnColsClose'), ()=>closeModal('#dlgCols'));
+    on($('#btnColsSave'), saveCols);
+
+    safeInit();
+  });
+
+  // ожидаем BX24
+  async function safeInit(){
+    try{
+      await bxInit(5000);
+    }catch(e){
+      console.warn('BX24.init timeout, продолжаем без него', e);
+    }
+    await bootstrap();
+  }
+
+  function bxInit(timeout=5000){
+    return new Promise((resolve,reject)=>{
+      let done=false;
+      BX24.init(()=>{
+        done=true; resolve();
+      });
+      setTimeout(()=>!done && reject(new Error('BX24.init timeout')), timeout);
     });
   }
-};
 
-/* --------------------- HTML целиком одной строкой --------------------- */
-const HTML =
-'<!doctype html><html lang="ru"><head><meta charset="utf-8">\
-<meta name="viewport" content="width=device-width, initial-scale=1">\
-<title>Лицензии</title><link rel="preconnect" href="https://api.bitrix24.com">\
-<style>html,body{height:100%;margin:0;background:#f5f7fb;font:14px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Arial,sans-serif;color:#1d222b}\
-.widget-root{height:100%;display:flex;flex-direction:column}\
-.toolbar{display:flex;align-items:center;gap:12px;padding:12px 16px}\
-.title{font-weight:700;font-size:28px;margin-right:auto}\
-.btn{appearance:none;border:1px solid #3bc8f5;background:#3bc8f5;color:#fff;padding:8px 12px;border-radius:8px;cursor:pointer}\
-.btn:hover{background:#3eddff;border-color:#3eddff}.btn.secondary{background:#fff;color:#1d222b;border-color:#dcdfe4}\
-.select{padding:6px 8px;border:1px solid #dcdfe4;border-radius:8px;background:#fff}\
-.table-wrap{height:calc(100vh - 80px);padding:0 16px 16px;overflow:auto}\
-table{width:100%;border-collapse:separate;border-spacing:0;background:#fff;border-radius:10px;overflow:hidden}\
-th,td{padding:10px 12px;border-bottom:1px solid #eef0f4;white-space:nowrap;vertical-align:middle}\
-th{position:sticky;top:0;z-index:1;background:#fafbfd;font-weight:600}.muted{color:#8b8f99}a{color:#136bf5;text-decoration:none}a:hover{text-decoration:underline}\
-.stage-bar{width:200px;height:8px;background:#eef0f4;border-radius:6px;position:relative}.stage-fill{position:absolute;left:0;top:0;height:8px;background:#b7cbe7;border-radius:6px}\
-.actions .btn{padding:6px 10px}\
-</style><script src="https://api.bitrix24.com/api/v1/"></script></head><body>\
-<div class="widget-root">\
-  <div class="toolbar">\
-    <div class="title">Лицензии</div>\
-    <button class="btn" id="btnNew">Новый элемент</button>\
-    <button class="btn secondary" id="btnPick">Выбрать элемент</button>\
-    <button class="btn secondary" id="btnRefresh">Обновить</button>\
-    <div style="margin-left:auto;display:flex;align-items:center;gap:8px">\
-      <span class="muted">Показывать по:&nbsp;</span>\
-      <select id="pageSize" class="select"><option value="10">10</option><option value="30">30</option><option value="50">50</option></select>\
-    </div>\
-  </div>\
-  <div class="table-wrap">\
-    <table id="grid">\
-      <thead><tr>\
-        <th>Стадия</th><th>ID исходной сделки</th><th>Лицензионный ключ</th><th>Адрес портала</th>\
-        <th>Текущий тариф</th><th>Окончание тарифа</th><th>Окончание подписки</th><th>Продукт</th><th>Действия</th>\
-      </tr></thead>\
-      <tbody id="tbody"></tbody>\
-    </table>\
-  </div>\
-</div>\
-<script>(function(){\
-  var ENTITY_TYPE_ID = 1032; /* SPA */\
-  var REL_DEAL_FIELD = "UF_CRM_1755533553"; /* множественное поле сделки с ID элементов SPA */\
-  var UF = {\
-    DEAL_ID:    "ufCrm_10_1717328865682",\
-    LIC_KEY:    "ufCrm_10_1717328730625",\
-    PORTAL_URL: "ufCrm_10_1717328814784",\
-    TARIFF:     "ufCrm_10_1717329015552",\
-    END_TARIFF: "ufCrm_10_1717329087589",\
-    END_MARKET: "ufCrm_10_1717329109963",\
-    PRODUCT:    "ufCrm_10_1717329453779"\
-  };\
-  var SELECT_FIELDS = ["id","title","assignedById","stageId","categoryId"].concat(Object.values(UF));\
-  var stage = { map:new Map(), byCat:new Map() };\
-  var FIELD_META = null, FIELD_META_LC = {};\
-  var tbody = document.getElementById("tbody");\
-  var pageSizeEl = document.getElementById("pageSize");\
-  var LINKED_IDS = [];\
-\
-  function alertMsg(m){ try{ alert(m); }catch(e){} }\
-  function bCall(method, params){\
-    return new Promise(function(res,rej){\
-      if(!window.BX24) return rej("BX24 not ready");\
-      BX24.callMethod(method, params||{}, function(r){\
-        if(r.error()) rej(r.error()+\" — \"+r.error_description());\
-        else{ var d=(typeof r.data===\"function\")?r.data():(r.answer?r.answer.result:r); res(d);}\
-      });\
-    });\
-  }\
-  function escapeHtml(s){ return String(s||\"\").replace(/&/g,\"&amp;\").replace(/</g,\"&lt;\").replace(/>/g,\"&gt;\").replace(/\\\"/g,\"&quot;\"); }\
-  function getFieldMeta(code){ return FIELD_META_LC[ String(code||\"\").toLowerCase() ] || null; }\
-  function getListText(code,val){ var f=getFieldMeta(code); if(!f||!Array.isArray(f.items)) return (val==null||val===\"\")?\"—\":val; var it=f.items.find(function(x){ return String(x.ID)===String(val);}); return it?(it.VALUE||it.NAME||val):val; }\
-\
-  function parseSpaIds(raw){\
-    if(!raw) return []; var a=Array.isArray(raw)?raw:[raw]; var out=[]; for(var i=0;i<a.length;i++){ var v=a[i]; if(typeof v===\"number\") out.push(v); else if(typeof v===\"string\"){ var m=v.match(/(\\d+)$/); if(m) out.push(Number(m[1])); } }\
-    var uniq={}; var res=[]; for(var j=0;j<out.length;j++){ var k=out[j]; if(!uniq[k]){uniq[k]=1; res.push(k);} } return res;\
-  }\
-\
-  function getDealId(){\
-    return new Promise(function(resolve){\
-      BX24.placement.info(function(info){\
-        var id=null; if(info&&info.options){ id=info.options.ID||info.options.id||null; }\
-        if(!id){ try{ var raw=BX24.getParam(\"PLACEMENT_OPTIONS\")||\"\"; var o=JSON.parse(raw||\"null\"); if(o&&o.ID) id=o.ID; }catch(e){} }\
-        resolve(Number(id||0));\
-      });\
-    });\
-  }\
-\
-  async function loadLinkedIds(dealId){\
-    if(!dealId) return [];\
-    try{ var d=await bCall(\"crm.deal.get\",{id:dealId}); var field=d[REL_DEAL_FIELD]|| (d.deal && d.deal[REL_DEAL_FIELD]) || null; return parseSpaIds(field); }\
-    catch(e){ console.log(\"deal.get\",e); return []; }\
-  }\
-\
-  async function loadStages(){\
-    stage.map.clear(); stage.byCat.clear();\
-    var cats=[]; try{ var r=await bCall(\"crm.item.category.list\",{entityTypeId:ENTITY_TYPE_ID}); cats=(r&&r.categories)||r||[]; }catch(e){ cats=[{id:0,name:\"По умолчанию\"}]; }\
-    for(var i=0;i<cats.length;i++){\
-      var c=cats[i]; var cid=Number(c.id||c.ID||0); var entityId=\"DT\"+ENTITY_TYPE_ID+\"_\"+cid; var st=[];\
-      try{ st=await bCall(\"crm.status.list\",{filter:{ENTITY_ID:entityId},order:{SORT:\"ASC\"}}); }catch(e){ st=[]; }\
-      var order=[]; for(var j=0;j<st.length;j++){ var s=st[j]; var sid=String(s.STATUS_ID||s.ID||\"\"); if(!sid) continue; var item={ID:sid,NAME:s.NAME||s.TITLE||sid,CATEGORY_ID:cid,SORT:Number(s.SORT||0)}; stage.map.set(sid,item); order.push(sid);}\
-      order.sort(function(a,b){ return (stage.map.get(a).SORT||0)-(stage.map.get(b).SORT||0);}); stage.byCat.set(cid,order);\
-    }\
-  }\
-\
-  async function ensureFieldMeta(){\
-    if(FIELD_META) return; var r=await bCall(\"crm.item.fields\",{entityTypeId:ENTITY_TYPE_ID}); FIELD_META=r.fields||r||{}; FIELD_META_LC={}; for(var k in FIELD_META){ FIELD_META_LC[k.toLowerCase()]=FIELD_META[k]; }\
-  }\
-\
-  function stagePercent(catId,stageId){ var arr=stage.byCat.get(catId)||[]; if(!arr.length) return 0; var idx=Math.max(0,arr.indexOf(stageId)); return Math.round((idx+1)/arr.length*100); }\
-  function stageSelectHtml(catId,current){ var arr=stage.byCat.get(catId)||[]; if(!arr.length) return \"<span class=\\\"muted\\\">Нет стадий</span>\"; var h=\"<select class=\\\"select\\\">\"; for(var i=0;i<arr.length;i++){ var id=arr[i]; var name=(stage.map.get(id)||{}).NAME||id; h+=\"<option value=\\\"\"+id+\"\\\"\"+(id===current?\" selected\":\"\")+\">\"+escapeHtml(name)+\"</option>\";} return h+=\"</select>\"; }\
-\
-  function rowHtml(row){\
-    var p=stagePercent(row.categoryId,row.stageId); var portal=row.portalUrl?\"<a href=\\\"\"+row.portalUrl+\"\\\" target=\\\"_blank\\\" rel=\\\"noopener\\\">\"+escapeHtml(row.portalUrl)+\"</a>\":\"—\";\
-    var tariff=getListText(UF.TARIFF,row.tariff); var product=getListText(UF.PRODUCT,row.product); var endTariff=row.endTariff||\"—\"; var endMarket=row.endMarket||\"—\"; var deal=row.dealId==null?\"—\":row.dealId;\
-    return \"<tr data-id=\\\"\"+row.id+\"\\\" data-cat=\\\"\"+row.categoryId+\"\\\">\"+\
-      \"<td><div class=\\\"stage-bar\\\"><div class=\\\"stage-fill\\\" style=\\\"width:\"+p+\"%\\\"></div></div> \"+stageSelectHtml(row.categoryId,row.stageId)+\"</td>\"+\
-      \"<td>\"+deal+\"</td><td>\"+(row.licKey||\"—\")+\"</td><td>\"+portal+\"</td>\"+\
-      \"<td>\"+tariff+\"</td><td>\"+endTariff+\"</td><td>\"+endMarket+\"</td><td>\"+product+\"</td>\"+\
-      \"<td class=\\\"actions\\\"><button class=\\\"btn secondary js-open\\\">Открыть</button> <button class=\\\"btn secondary js-del\\\">Удалить</button></td>\"+\
-    \"</tr>\";\
-  }\
-\
-  async function loadItems(limit){\
-    if(!LINKED_IDS.length) return [];\
-    var r=await bCall(\"crm.item.list\",{ entityTypeId:ENTITY_TYPE_ID, select:SELECT_FIELDS, filter:{ \"@id\": LINKED_IDS }, limit: limit, start: -1 });\
-    var arr=(r && (r.items|| (r.result&&r.result.items))) || [];\
-    var rows=[]; for(var i=0;i<arr.length;i++){ var it=arr[i]; rows.push({ id:it.id, title:it.title, assignedById:it.assignedById, stageId:it.stageId, categoryId:it.categoryId||0, dealId:it[UF.DEAL_ID]||null, licKey:it[UF.LIC_KEY]||\"\", portalUrl:it[UF.PORTAL_URL]||\"\", tariff:it[UF.TARIFF]||null, endTariff:it[UF.END_TARIFF]||null, endMarket:it[UF.END_MARKET]||null, product:it[UF.PRODUCT]||null }); }\
-    return rows;\
-  }\
-\
-  async function render(){\
-    await ensureFieldMeta();\
-    var limit=Number(pageSizeEl.value||10); var items=await loadItems(limit); tbody.innerHTML = items.map(rowHtml).join(\"\");\
-  }\
-\
-  /* --- события таблицы --- */\
-  tbody.addEventListener(\"change\", function(e){ var sel=e.target; if(sel.tagName!==\"SELECT\") return; var tr=sel.closest(\"tr\"); if(!tr) return; var id=Number(tr.getAttribute(\"data-id\")); var st=sel.value; bCall(\"crm.item.update\",{entityTypeId:ENTITY_TYPE_ID,id:id,fields:{stageId:st}}).then(function(){ render(); }).catch(function(err){ alertMsg(\"Ошибка смены стадии: \"+err); }); });\
-  tbody.addEventListener(\"click\", function(e){\
-    var open=e.target.closest(\".js-open\"); if(open){ var tr=open.closest(\"tr\"); var id=Number(tr.getAttribute(\"data-id\")); try{ if(top && top.BX && top.BX.SidePanel){ top.BX.SidePanel.Instance.open(\"/crm/type/\"+ENTITY_TYPE_ID+\"/details/\"+id+\"/\",{cacheable:false}); } else { BX24.openPath(\"/crm/type/\"+ENTITY_TYPE_ID+\"/details/\"+id+\"/\"); } }catch(ex){ BX24.openPath(\"/crm/type/\"+ENTITY_TYPE_ID+\"/details/\"+id+\"/\"); } return; }\
-    var del=e.target.closest(\".js-del\"); if(del){ var tr2=del.closest(\"tr\"); var id2=Number(tr2.getAttribute(\"data-id\")); if(!confirm(\"Удалить элемент #\"+id2+\"?\")) return; bCall(\"crm.item.delete\",{entityTypeId:ENTITY_TYPE_ID,id:id2}).then(function(){ render(); }).catch(function(err){ alertMsg(\"Ошибка удаления: \"+err); }); }\
-  });\
-\
-  document.getElementById(\"btnRefresh\").addEventListener(\"click\", function(){ render(); });\
-  pageSizeEl.addEventListener(\"change\", function(){ render(); });\
-  document.getElementById(\"btnPick\").addEventListener(\"click\", function(){ try{ if(top && top.BX && top.BX.SidePanel){ top.BX.SidePanel.Instance.open(\"/crm/type/\"+ENTITY_TYPE_ID+\"/list/\",{cacheable:false}); } else { BX24.openPath(\"/crm/type/\"+ENTITY_TYPE_ID+\"/list/\"); } }catch(e){ BX24.openPath(\"/crm/type/\"+ENTITY_TYPE_ID+\"/list/\"); } });\
-  document.getElementById(\"btnNew\").addEventListener(\"click\", async function(){\
-    try{ if(top && top.BX && top.BX.SidePanel){ top.BX.SidePanel.Instance.open(\"/crm/type/\"+ENTITY_TYPE_ID+\"/details/0/?open=edit\",{cacheable:false}); return; } }catch(e){}\
-    try{ var r=await bCall(\"crm.item.add\",{entityTypeId:ENTITY_TYPE_ID,fields:{title:\"Новый элемент\"}}); var nid=(r && (r.item&&r.item.id)) || r.id || r; BX24.openPath(\"/crm/type/\"+ENTITY_TYPE_ID+\"/details/\"+nid+\"/\"); }\
-    catch(err){ alertMsg(\"Не удалось создать элемент: \"+err); }\
-  });\
-\
-  function start(){ Promise.all([loadStages(), getDealId().then(loadLinkedIds)]).then(function(res){ LINKED_IDS = res[1] || []; render(); }).catch(function(e){ alertMsg(\"Ошибка инициализации: \"+e); }); }\
-  if(document.readyState!==\"loading\"){ BX24.init(start); } else { document.addEventListener(\"DOMContentLoaded\", function(){ BX24.init(start); }); }\
-})();</script></body></html>';
+  async function bootstrap(){
+    try{
+      // узнать контекст (dealId)
+      state.dealId = await getDealId();
+      // мета полей (для enums)
+      state.fields = await api('crm.item.fields', {entityTypeId: ENTITY_TYPE_ID});
+      buildEnums();
+      fillEnumSelects();
+      // стадии (по категориям)
+      await loadStages();
+      fillStageSelect();
+      // перечень связанных id из сделки
+      if (state.dealId) {
+        state.linkedIds = await loadLinkedSet(state.dealId);
+      } else {
+        state.linkedIds = new Set(); // не в сделке — отрисуем пусто
+      }
+      // загрузка записей
+      await loadItems();
+      // колонки
+      buildColsUi();
+      render();
+    }catch(e){
+      console.error('bootstrap error', e);
+      render(); // хотя бы чистую таблицу
+    }
+  }
+
+  // ====== Bitrix helpers ======
+  function api(method, params={}){
+    return new Promise((resolve,reject)=>{
+      BX24.callMethod(method, params, function(res){
+        if (res.error()){
+          reject(new Error(res.error() + ': ' + (res.answer?.error_description || '')));
+        } else {
+          resolve(res.data());
+        }
+      })
+    })
+  }
+
+  async function getDealId(){
+    try{
+      const info = await new Promise(resolve => BX24.placement.info(resolve));
+      if (info?.options?.ID) return Number(info.options.ID);
+    }catch(e){}
+    // резерв — из url
+    const m = location.search.match(/ID=(\\d+)/i) || location.hash.match(/ID=(\\d+)/i);
+    return m ? Number(m[1]) : null;
+  }
+
+  async function loadLinkedSet(dealId){
+    const d = await api('crm.deal.get', {id: dealId});
+    const raw = d[DEAL_LINK_FIELD] || [];
+    const set = new Set();
+    const push = v=>{
+      if (typeof v==='number') set.add(v);
+      else if (typeof v==='string'){
+        const m = v.match(/DYNAMIC_1032_(\\d+)/i);
+        if (m) set.add(Number(m[1]));
+        else if (/^\\d+$/.test(v)) set.add(Number(v));
+      }
+    };
+    if (Array.isArray(raw)) raw.forEach(push);
+    else push(raw);
+    return set;
+  }
+
+  // сохранить связи в сделку
+  async function saveLinkSet(){
+    if (!state.dealId) return;
+    const arr = Array.from(state.linkedIds).map(id => 'DYNAMIC_1032_'+id);
+    await api('crm.deal.update', {id: state.dealId, fields: {[DEAL_LINK_FIELD]: arr}});
+  }
+
+  // ====== Поля / справочники ======
+  function buildEnums(){
+    const f = state.fields.fields || state.fields;
+    const tariff = f['ufCrm10_1717329015552'] || f['UF_CRM_10_1717329015552'];
+    const product = f['ufCrm10_1717329453779'] || f['UF_CRM_10_1717329453779'];
+
+    if (tariff?.items) tariff.items.forEach(i => state.enums.tariff.set(i.ID, i.VALUE));
+    if (product?.items) product.items.forEach(i => state.enums.product.set(i.ID, i.VALUE));
+  }
+
+  function fillEnumSelects(){
+    const tSel = $('#f_tariff');
+    const pSel = $('#f_product');
+    for (const [id,name] of state.enums.tariff) {
+      const o = document.createElement('option'); o.value=id; o.textContent=name; tSel.appendChild(o);
+    }
+    for (const [id,name] of state.enums.product) {
+      const o = document.createElement('option'); o.value=id; o.textContent=name; pSel.appendChild(o);
+    }
+  }
+
+  // ====== Стадии ======
+  async function loadStages(){
+    // категории
+    let cats = [];
+    try{
+      const r = await api('crm.item.category.list', {entityTypeId: ENTITY_TYPE_ID});
+      cats = (r && r.categories) || r || [];
+    }catch(e){
+      cats = [{id:0,name:'Общая'}];
+    }
+
+    state.stagesByCat.clear();
+    state.stageMap.clear();
+    state.stageList = [];
+
+    for (const c of cats){
+      const cid = Number(c.id || c.ID || 0);
+      const entityId = \`DYNAMIC_\${ENTITY_TYPE_ID}_STAGE_\${cid}\`;
+      let list = [];
+      try{
+        list = await api('crm.status.list', { filter: {ENTITY_ID: entityId}, order: {SORT:'ASC'} });
+      }catch(e){ list = []; }
+
+      const order = [];
+      for (const s of list){
+        const sid = String(s.STATUS_ID || s.ID || '');
+        if (!sid) continue;
+        const obj = {
+          ID: sid,
+          NAME: s.NAME || s.TITLE || sid,
+          SORT: Number(s.SORT || 0),
+          CATEGORY_ID: cid
+        };
+        order.push(sid);
+        state.stageMap.set(sid, obj);
+        state.stageList.push(obj);
+      }
+      order.sort((a,b)=> (state.stageMap.get(a).SORT||0) - (state.stageMap.get(b).SORT||0));
+      state.stagesByCat.set(cid, order);
+    }
+  }
+
+  function fillStageSelect(){
+    const sSel = $('#f_stage');
+    state.stageList.forEach(st=>{
+      const o = document.createElement('option');
+      o.value = st.ID;
+      o.textContent = st.NAME;
+      sSel.appendChild(o);
+    })
+  }
+
+  // ====== Данные ======
+  function getFilters(){
+    return {
+      title: $('#f_title').value.trim().toLowerCase(),
+      licKey: $('#f_key').value.trim().toLowerCase(),
+      portal: $('#f_portal').value.trim().toLowerCase(),
+      tariff: $('#f_tariff').value,
+      endT: $('#f_endT').value,
+      endM: $('#f_endM').value,
+      product: $('#f_product').value,
+      stage: $('#f_stage').value,
+    }
+  }
+
+  async function loadItems(){
+    if (!state.linkedIds.size){ state.items = []; return; }
+    const ids = Array.from(state.linkedIds);
+    // селект полей
+    const select = [
+      'id','title','assignedById','stageId','categoryId',
+      '${UF.DEAL_ID}','${UF.LIC_KEY}','${UF.PORTAL_URL}',
+      '${UF.TARIFF}','${UF.END_TARIFF}','${UF.END_MARKET}','${UF.PRODUCT}'
+    ];
+    // bitrix ожидает snakeCase, поэтому как есть
+    const filter = {'@id': ids};
+    const order = { 'id':'asc' };
+
+    // грузим весь набор (он небольшой)
+    const list = await api('crm.item.list', {
+      entityTypeId: ENTITY_TYPE_ID,
+      filter, order, select, start: -1
+    });
+    state.items = list.items || list || [];
+  }
+
+  // ====== Рендер ======
+  function render(){
+    // применим колонки видимость
+    applyCols();
+
+    const tb = $('#tbody'); tb.innerHTML='';
+    const items = state.items
+      .filter(item=>applyRowFilter(item));
+
+    // пагинация
+    const pageSize = state.perPage;
+    const page = 1; // одна страница — лист скроллом; можно внедрить полноценную пагинацию позже
+    const slice = items.slice((page-1)*pageSize, page*pageSize);
+
+    for (const it of slice){
+      tb.appendChild(renderRow(it));
+    }
+  }
+
+  function applyRowFilter(it){
+    const f = getFilters();
+    const get = k => (it[k] ?? '').toString().toLowerCase();
+
+    const title = get('title');
+    const lic = (it['${UF.LIC_KEY}'] ?? '').toString().toLowerCase();
+    const portal = (it['${UF.PORTAL_URL}'] ?? '').toString().toLowerCase();
+    const tariff = it['${UF.TARIFF}'] ?? '';
+    const product = it['${UF.PRODUCT}'] ?? '';
+    const endT = it['${UF.END_TARIFF}'] ?? '';
+    const endM = it['${UF.END_MARKET}'] ?? '';
+    const stageId = it.stageId ?? '';
+
+    if (f.title && !title.includes(f.title)) return false;
+    if (f.licKey && !lic.includes(f.licKey)) return false;
+    if (f.portal && !portal.includes(f.portal)) return false;
+    if (f.tariff && String(tariff) !== String(f.tariff)) return false;
+    if (f.product && String(product) !== String(f.product)) return false;
+    if (f.stage && String(stageId) !== String(f.stage)) return false;
+    if (f.endT && String(endT).slice(0,10) !== f.endT) return false;
+    if (f.endM && String(endM).slice(0,10) !== f.endM) return false;
+    return true;
+  }
+
+  function renderRow(it){
+    const tr = document.createElement('tr');
+
+    const stageId = it.stageId || '';
+    const st = state.stageMap.get(String(stageId));
+    const stName = st ? st.NAME : '—';
+
+    const dealId = it['${UF.DEAL_ID}'] ?? '—';
+    const lic = it['${UF.LIC_KEY}'] ?? '—';
+    const url = it['${UF.PORTAL_URL}'] ?? '';
+    const tariff = state.enums.tariff.get(String(it['${UF.TARIFF}'])) || '—';
+    const endT = it['${UF.END_TARIFF}'] ? String(it['${UF.END_TARIFF}']).slice(0,10) : '—';
+    const endM = it['${UF.END_MARKET}'] ? String(it['${UF.END_MARKET}']).slice(0,10) : '—';
+    const product = state.enums.product.get(String(it['${UF.PRODUCT}'])) || '—';
+
+    const stageTd = document.createElement('td');
+    stageTd.setAttribute('data-col','stage');
+    const pill = document.createElement('div'); pill.className='pill';
+    // прогресс — позиция стадии в категории
+    let pct = 0;
+    const order = state.stagesByCat.get(Number(it.categoryId) || 0) || [];
+    const idx = Math.max(0, order.indexOf(String(stageId)));
+    if (order.length) pct = Math.round(((idx+1)/order.length)*100);
+    pill.innerHTML = '<div class="bar" style="width:'+pct+'%"></div>';
+    const name = document.createElement('div'); name.className='stage-name muted'; name.textContent = stName;
+    stageTd.appendChild(pill); stageTd.appendChild(document.createElement('div')).className='muted';
+    stageTd.appendChild(name);
+
+    const dealTd = tdText(dealId, 'dealId');
+    const licTd = tdText(lic, 'licKey');
+    const urlTd = document.createElement('td'); urlTd.setAttribute('data-col','portal');
+    if (url){
+      const a = document.createElement('a'); a.href=url; a.target='_blank'; a.textContent=url; a.className='link';
+      urlTd.appendChild(a);
+    } else urlTd.textContent = '—';
+
+    const tariffTd = tdText(tariff, 'tariff');
+    const endTTd = tdText(endT, 'endT');
+    const endMTd = tdText(endM, 'endM');
+    const prodTd = tdText(product, 'product');
+
+    const actTd = document.createElement('td'); actTd.setAttribute('data-col','actions');
+    const rowAct = document.createElement('div'); rowAct.className='row-actions';
+    const btnOpen = document.createElement('button'); btnOpen.className='btn btn-sm ghost'; btnOpen.textContent='Открыть';
+    btnOpen.onclick = ()=> openItem(it.id);
+    const btnDel = document.createElement('button'); btnDel.className='btn btn-sm danger'; btnDel.textContent='Удалить';
+    btnDel.onclick = ()=> removeLink(it.id);
+    rowAct.appendChild(btnOpen); rowAct.appendChild(btnDel);
+    actTd.appendChild(rowAct);
+
+    tr.appendChild(stageTd);
+    tr.appendChild(dealTd);
+    tr.appendChild(licTd);
+    tr.appendChild(urlTd);
+    tr.appendChild(tariffTd);
+    tr.appendChild(endTTd);
+    tr.appendChild(endMTd);
+    tr.appendChild(prodTd);
+    tr.appendChild(actTd);
+    return tr;
+  }
+  function tdText(val, col){ const td=document.createElement('td'); td.setAttribute('data-col',col); td.textContent = (val??'—')||'—'; return td; }
+
+  // ====== Действия ======
+  function openItem(id){
+    BX24.openPath('/crm/type/'+ENTITY_TYPE_ID+'/details/'+id+'/');
+  }
+  function openCreate(){
+    BX24.openPath('/crm/type/'+ENTITY_TYPE_ID+'/details/0/');
+  }
+  async function removeLink(id){
+    if (!state.dealId) return;
+    state.linkedIds.delete(Number(id));
+    await saveLinkSet();
+    await loadItems();
+    render();
+  }
+
+  // ====== Подбор (простая модалка) ======
+  function openPicker(){
+    $('#pickSearch').value='';
+    $('#pickList').innerHTML='';
+    openModal('#dlgPick');
+    loadPickList();
+  }
+  async function loadPickList(){
+    const q = $('#pickSearch').value.trim();
+    // небольшая выдача
+    const resp = await api('crm.item.list', {
+      entityTypeId: ENTITY_TYPE_ID,
+      filter: q ? {'%title': q} : {},
+      select:['id','title'],
+      order: {id:'desc'},
+      start: -1
+    });
+    const list = resp.items || resp || [];
+    const cont = $('#pickList'); cont.innerHTML='';
+    list.forEach(it=>{
+      const row = document.createElement('div'); row.className='itm';
+      const cb = document.createElement('input'); cb.type='checkbox'; cb.value=it.id;
+      if (state.linkedIds.has(Number(it.id))) cb.checked=true;
+      const title = document.createElement('div'); title.textContent=it.title||('ID '+it.id);
+      row.appendChild(cb); row.appendChild(title);
+      cont.appendChild(row);
+    });
+  }
+  async function applyPicked(){
+    const checks = $$('#pickList input[type="checkbox"]');
+    checks.forEach(cb => { if (cb.checked) state.linkedIds.add(Number(cb.value)); });
+    await saveLinkSet();
+    closeModal('#dlgPick');
+    await loadItems();
+    render();
+  }
+
+  // ====== Колонки ======
+  function buildColsUi(){
+    const m = [
+      ['stage','Стадия'],
+      ['dealId','ID исходной сделки'],
+      ['licKey','Ключ'],
+      ['portal','Адрес портала'],
+      ['tariff','Текущий тариф'],
+      ['endT','Окончание тарифа'],
+      ['endM','Окончание подписки'],
+      ['product','Продукт'],
+      ['actions','Действия']
+    ];
+    const host = $('#colsSwitch'); host.innerHTML='';
+    m.forEach(([k,caption])=>{
+      const id = 'col_'+k;
+      const label = document.createElement('label');
+      label.innerHTML = '<input type="checkbox" '+(state.cols[k]?'checked':'')+' id="'+id+'"><span>'+caption+'</span>';
+      host.appendChild(label);
+    });
+  }
+  function openCols(){ openModal('#dlgCols'); }
+  function saveCols(){
+    $$('#colsSwitch input[type="checkbox"]').forEach(ch=>{
+      const key = ch.id.replace(/^col_/,'');
+      state.cols[key] = ch.checked;
+    });
+    localStorage.setItem('cols', JSON.stringify(state.cols));
+    closeModal('#dlgCols');
+    applyCols();
+  }
+  function applyCols(){
+    // заголовки
+    $$('#thead th').forEach(th=>{
+      const key = th.dataset.col;
+      th.classList.toggle('col-hidden', !state.cols[key]);
+    });
+    // ячейки
+    $$('#tbody td').forEach(td=>{
+      const key = td.dataset.col;
+      td.classList.toggle('col-hidden', !state.cols[key]);
+    });
+  }
+
+  // ====== Модалки ======
+  function openModal(sel){ $(sel).classList.add('show'); }
+  function closeModal(sel){ $(sel).classList.remove('show'); }
+
+  // ====== Утилиты ======
+  function debounce(fn,ms){ let t; return (...args)=>{clearTimeout(t); t=setTimeout(()=>fn(...args),ms)} }
+
+})();
+</script>
+</body>
+</html>`;
+    return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" }});
+  }
+};
