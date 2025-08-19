@@ -1,7 +1,19 @@
 export default {
-  async fetch(request) {
-    // ====== КОНФИГ С ЗАГРУЗЧИКА (только то, что нужно прямо в HTML) ======
-    const PORTAL_ORIGIN = 'https://tehprof.bitrix24.kz';
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+
+    // 1) Раздача статических файлов (ES-модули, css, карты)
+    if (
+      request.method === 'GET' &&
+      (url.pathname.startsWith('/assets/') ||
+       url.pathname.startsWith('/favicon') ||
+       url.pathname.endsWith('.js') ||
+       url.pathname.endsWith('.css') ||
+       url.pathname.endsWith('.map'))
+    ) {
+      // В Pages Functions это отдаст статику из билда
+      return env.ASSETS.fetch(request);
+    }
 
     // Ранний снимок POST (PLACEMENT_OPTIONS), чтобы прокинуть в boot
     let placement = null, placementOptions = '';
