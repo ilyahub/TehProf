@@ -1,3 +1,4 @@
+console.log('[main] boot');
 import { waitBX24 } from './sdk.js';
 import { CONFIG } from './config.js';
 import { J, $ } from './utils.js';
