@@ -84,28 +84,56 @@ const lighten=(hex,p=0.15)=>{ // hex -> lighter
 
 // LOAD
 function load(){
-  if(!S.dealId){ ui.rows.innerHTML='<tr><td colspan="12" class="err">Нет ID сделки</td></tr>'; return; }
+  if(!S.dealId){
+    ui.rows.innerHTML = '<tr><td colspan="12" class="err">Нет ID сделки</td></tr>';
+    return;
+  }
 
-  BX24.callMethod('crm.deal.get',{id:S.dealId}, r=>{
-    if(r.error()){ ui.rows.innerHTML=`<tr><td colspan="12" class="err">${r.error_description()}</td></tr>`; return; }
+  BX24.callMethod('crm.deal.get', { id: S.dealId }, r => {
+    if (r.error()){
+      ui.rows.innerHTML = `<tr><td colspan="12" class="err">${r.error_description()}</td></tr>`;
+      return;
+    }
 
-    const raw=r.data()[S.field];
-    S.mode=detectMode(raw); S.bindings=A(raw);
-    S.ids = (S.mode==='bindings') ? S.bindings.map(c=>idFromBinding(c,S.typeId)).filter(Boolean)
-                                   : A(raw).map(Number).filter(Boolean);
+    const raw = r.data()[S.field];
+    S.mode = detectMode(raw);
+    S.bindings = A(raw);
+    S.ids = (S.mode === 'bindings')
+      ? S.bindings.map(c => idFromBinding(c, S.typeId)).filter(Boolean)
+      : A(raw).map(Number).filter(Boolean);
 
-    if(!S.ids.length){ ui.rows.innerHTML='<tr><td colspan="12" class="muted">Пока нет связанных элементов</td></tr>'; fit(); return; }
+    if (!S.ids.length){
+      ui.rows.innerHTML = '<tr><td colspan="12" class="muted">Пока нет связанных элементов</td></tr>';
+      fit();
+      return;
+    }
 
-    // NB: забираем все поля через ['*']
-    BX24.callMethod('crm.item.list',{ entityTypeId:S.typeId, filter:{'@id':S.ids}, select:['*'] }, async rr=>{
-      let items=[]; if(!rr.error()) items=rr.data().items||[]; else items=[];
-      S.items=items;
+    // ⚠️ ВАЖНО: ЯВНО перечисляем все нужные поля, иначе UF не придут
+    const select = [
+      'id','title','stageId','categoryId','assignedById',
+      F.dealIdSource, F.licenseKey, F.portalUrl, F.tariff,
+      F.tariffEnd, F.marketEnd, F.product
+    ];
+
+    BX24.callMethod('crm.item.list', {
+      entityTypeId: S.typeId,
+      filter: {'@id': S.ids},
+      select
+    }, async rr => {
+      let items = [];
+      if (!rr.error()) items = rr.data().items || [];
+
+      S.items = items;
 
       await buildUFEnums();
       await buildUsers(items);
       await buildStages(items);
+
+      // если что-то всё ещё не пришло — дотягиваем точечно
       await hydrateUFsIfEmpty();
-      render(); fit();
+
+      render();
+      fit();
     });
   });
 }
@@ -230,15 +258,28 @@ function getStageObject(item){
 }
 
 async function hydrateUFsIfEmpty(){
-  // если где-то не пришли UF — дотягиваем get
-  const need=[F.dealIdSource,F.licenseKey,F.portalUrl,F.tariff,F.tariffEnd,F.marketEnd,F.product];
-  const miss=S.items.some(it=>need.some(code=>it[code]===undefined));
-  if(!miss) return;
-  const calls={}; S.items.forEach((it,i)=>calls['g'+i]=['crm.item.get',{entityTypeId:S.typeId,id:it.id}]);
-  await new Promise(res=>BX24.callBatch(calls,rr=>{
-    for(const k in rr){ if(rr[k].error()) continue;
-      const full=rr[k].data().item; const idx=S.items.findIndex(x=>x.id===full.id);
-      if(idx>-1) Object.assign(S.items[idx],full);
+  const need = [
+    F.dealIdSource, F.licenseKey, F.portalUrl,
+    F.tariff, F.tariffEnd, F.marketEnd, F.product
+  ];
+
+  const isMissing = (it, code) => (it[code] === undefined || it[code] === null || it[code] === '');
+
+  const mustHydrate = S.items.some(it => need.some(code => isMissing(it, code)));
+  if (!mustHydrate) return;
+
+  const calls = {};
+  S.items.forEach((it, i) => calls['g' + i] = ['crm.item.get', { entityTypeId: S.typeId, id: it.id }]);
+
+  await new Promise(res => BX24.callBatch(calls, rr => {
+    for (const k in rr){
+      if (rr[k].error()) continue;
+      const full = rr[k].data().item;
+      const idx = S.items.findIndex(x => x.id === full.id);
+      if (idx > -1){
+        // аккуратно мержим, чтобы подтянуть именно UF и прочее
+        Object.assign(S.items[idx], full);
+      }
     }
     res();
   }, true));
