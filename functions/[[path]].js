@@ -164,8 +164,6 @@ export async function onRequest({ request, env }) {
   <script src="https://api.bitrix24.com/api/v1/"></script>
   <!-- ВАЖНО: ES-модуль -->
   <script type="module" src="/assets/app/main.js"></script>
-  <!-- Перестановка первых трёх колонок -->
-  <script defer src="/assets/app/reorder.js"></script>
 </body>
 </html>`;
 
