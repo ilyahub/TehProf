@@ -48,26 +48,33 @@ export default {
     *{box-sizing:border-box}
     body{margin:0;padding:20px 22px;font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--ink)}
     h1{margin:0 0 14px;font-size:38px;color:#60a5fa;font-weight:800}
+
     .toolbar{display:flex;gap:10px;align-items:center;margin:10px 0 12px;flex-wrap:wrap}
     .btn{padding:10px 14px;border-radius:10px;border:1px solid var(--line);background:#fff;cursor:pointer;font-weight:700;transition:.12s}
     .btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
     .btn.primary:hover{background:var(--blue-h);border-color:var(--blue-h)}
     .btn.primary:active{background:var(--blue-a);border-color:var(--blue-a)}
+
     .table-wrap{height:calc(100vh - 170px);min-height:420px;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:14px}
     table{width:100%;border-collapse:separate;border-spacing:0}
     th,td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:middle;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     th{background:#fafbff;color:#374151;text-align:left;font-weight:700;position:sticky;top:0;z-index:2}
     tr.filters th{background:#fff;position:sticky;top:42px;z-index:2}
     tr:last-child td{border-bottom:none}
+
     th{position:sticky}
     th .resizer{position:absolute;right:0;top:0;width:6px;height:100%;cursor:col-resize;user-select:none}
     th.resizing{border-right:2px solid #93c5fd}
+
     .filter{width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:#fff;font:inherit}
+
     .stage{display:flex;align-items:center;gap:10px}
     .bar{position:relative;flex:0 0 160px;height:10px;border-radius:999px;background:#edeef3;overflow:hidden}
     .bar>i{position:absolute;left:0;top:0;bottom:0;background:#a5b4fc}
     .stageSel{padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:#fff;margin-left:10px}
+
     .muted{color:var(--mut)} .err{color:#dc2626}
+
     .modal{position:fixed;inset:0;background:rgba(17,24,39,.5);display:none;align-items:center;justify-content:center;z-index:9999}
     .card{width:min(640px,95vw);max-height:85vh;background:#fff;border-radius:16px;border:1px solid var(--line);display:flex;flex-direction:column}
     .card-h{padding:14px 16px;border-bottom:1px solid var(--line);font-weight:700}
@@ -108,23 +115,28 @@ export default {
           <th data-col="mEnd">Окончание подписки<div class="resizer"></div></th>
           <th data-col="product">Продукт<div class="resizer"></div></th>
           <th data-col="act">Действия<div class="resizer"></div></th>
+
+          <!-- скрытые по умолчанию -->
           <th data-col="id" style="display:none">ID<div class="resizer"></div></th>
           <th data-col="title" style="display:none">Название<div class="resizer"></div></th>
           <th data-col="ass" style="display:none">Ответственный<div class="resizer"></div></th>
         </tr>
+
         <tr class="filters">
-          <th data-col="stage"><input class="filter" id="fStage" placeholder="Фильтр по стадии"></th>
-          <th data-col="deal"><input class="filter" id="fDeal" placeholder="ID сделки"></th>
-          <th data-col="key"><input class="filter" id="fKey" placeholder="Ключ"></th>
-          <th data-col="url"><input class="filter" id="fUrl" placeholder="Портал"></th>
-          <th data-col="tariff"><input class="filter" id="fTariff" placeholder="Тариф"></th>
+          <th data-col="stage"><input class="filter" id="fStage" placeholder="Фильтр по стадии" /></th>
+          <th data-col="deal"><input class="filter" id="fDeal" placeholder="ID сделки" /></th>
+          <th data-col="key"><input class="filter" id="fKey" placeholder="Ключ" /></th>
+          <th data-col="url"><input class="filter" id="fUrl" placeholder="Портал" /></th>
+          <th data-col="tariff"><input class="filter" id="fTariff" placeholder="Тариф" /></th>
           <th data-col="tEnd"></th>
           <th data-col="mEnd"></th>
-          <th data-col="product"><input class="filter" id="fProduct" placeholder="Продукт"></th>
+          <th data-col="product"><input class="filter" id="fProduct" placeholder="Продукт" /></th>
           <th data-col="act"></th>
+
+          <!-- места для скрытых по умолчанию -->
           <th data-col="id" style="display:none"></th>
-          <th data-col="title" style="display:none"><input class="filter" id="fTitle" style="display:none"></th>
-          <th data-col="ass" style="display:none"><input class="filter" id="fAss" style="display:none"></th>
+          <th data-col="title" style="display:none"><input class="filter" id="fTitle" style="display:none" /></th>
+          <th data-col="ass" style="display:none"><input class="filter" id="fAss" style="display:none" /></th>
         </tr>
       </thead>
       <tbody id="rows"><tr><td colspan="12" class="muted">Загрузка…</td></tr></tbody>
@@ -143,13 +155,10 @@ export default {
     </div>
   </div>
 
-  <!-- Передаём ранний снимок в фронт -->
   <script>window.__BOOT__ = ${JSON.stringify(boot)};</script>
-
-  <!-- 1) Официальный SDK Bitrix24 -->
+  <!-- SDK Bitrix24 -->
   <script src="https://api.bitrix24.com/api/v1/"></script>
-
-  <!-- 2) Наши ES‑модули приложения -->
+  <!-- Наше приложение (ES-модуль) -->
   <script type="module" src="/assets/app/main.js"></script>
 </body>
 </html>`;
