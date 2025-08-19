@@ -112,6 +112,9 @@ export async function onRequest({ request, env }) {
       <thead>
         <tr class="head">
           <!-- Базовый порядок — reorder.js подвинет ID/Название/Ответственного в начало -->
+          <th data-col="id">ID<div class="resizer"></div></th>
+          <th data-col="title">Название<div class="resizer"></div></th>
+          <th data-col="ass">Ответственный<div class="resizer"></div></th>
           <th data-col="stage">Стадия<div class="resizer"></div></th>
           <th data-col="deal">ID исходной сделки<div class="resizer"></div></th>
           <th data-col="key">Лицензионный ключ<div class="resizer"></div></th>
@@ -121,26 +124,21 @@ export async function onRequest({ request, env }) {
           <th data-col="mEnd">Окончание подписки<div class="resizer"></div></th>
           <th data-col="product">Продукт<div class="resizer"></div></th>
           <th data-col="act">Действия<div class="resizer"></div></th>
-
-          <th data-col="id">ID<div class="resizer"></div></th>
-          <th data-col="title">Название<div class="resizer"></div></th>
-          <th data-col="ass">Ответственный<div class="resizer"></div></th>
         </tr>
 
         <tr class="filters">
+          <th data-col="id"></th>
+          <th data-col="title"><input class="filter" id="fTitle" placeholder="Фильтр по названию"></th>
+          <th data-col="ass"><input class="filter" id="fAss" placeholder="Фильтр по ответственному"></th>
           <th data-col="stage"><input class="filter" id="fStage" placeholder="Фильтр по стадии"></th>
           <th data-col="deal"><input class="filter" id="fDeal" placeholder="ID сделки"></th>
-          <th data-col="key"><input class="filter" id="fKey" placeholder="Ключ"></th>
+          <th data-col="key">
           <th data-col="url"><input class="filter" id="fUrl" placeholder="Портал"></th>
           <th data-col="tariff"><input class="filter" id="fTariff" placeholder="Тариф"></th>
           <th data-col="tEnd"></th>
           <th data-col="mEnd"></th>
           <th data-col="product"><input class="filter" id="fProduct" placeholder="Продукт"></th>
           <th data-col="act"></th>
-
-          <th data-col="id"></th>
-          <th data-col="title"><input class="filter" id="fTitle" placeholder="Фильтр по названию"></th>
-          <th data-col="ass"><input class="filter" id="fAss" placeholder="Фильтр по ответственному"></th>
         </tr>
       </thead>
       <tbody id="rows"><tr><td colspan="12" class="muted">Загрузка…</td></tr></tbody>
