@@ -1,5 +1,5 @@
 // Константы проекта (SPA "Лицензии")
-export const DEAL_FIELD_CODE = 'UF_CRM_1755533553';   // множественное поле связей/ID в сделке
+export const DEAL_LINK_FIELD = 'UF_CRM_1755533553';   // множественное поле связей/ID в сделке
 export const SMART_ENTITY_TYPE_ID = 1032;             // entityTypeId смарт-процесса
 export const PORTAL_ORIGIN = 'https://tehprof.bitrix24.kz';
 
