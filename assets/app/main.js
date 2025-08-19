@@ -1,67 +1,74 @@
-// Главный сценарий (ES-модуль)
+// assets/app/main.js
 import { DEAL_FIELD_CODE, SMART_ENTITY_TYPE_ID, PORTAL_ORIGIN, F as Fconf } from './config.js';
-import { bx, getDeal, getItemsByIds, listUserFields, listUsers, listCategoryStages, updateItemStage } from './api.js';
+import { getDeal, getItemsByIds, listUserFields, listUsers, listCategoryStages, updateItemStage } from './api.js';
 import { S, setUfKeyMap } from './state.js';
 import { $, A, pick, shortUser, putEnum } from './utils.js';
 import { fitToIframe, enableResizers, bindToolbar, renderTable, applyVisibleColumns, applyColsModal } from './ui.js';
 
-S.field = DEAL_FIELD_CODE;
+/* базовые настройки состояния */
+S.field  = DEAL_FIELD_CODE;
 S.typeId = SMART_ENTITY_TYPE_ID;
-S.F = Fconf;
+S.F      = Fconf;
 
-// ————— Boot (PLACEMENT / POST snapshot) —————
-(function bootFromPostEarly() {
+/* --------- bootstrap: вытащить dealId из query/placement --------- */
+(function boot() {
+  const q = new URLSearchParams(location.search);
+  const qDeal = Number(q.get('dealId'));
+  if (qDeal) S.dealId = qDeal;
+
   try {
-    const f = new URLSearchParams(location.search);
-    const p = f.get('placement_options') || f.get('PLACEMENT_OPTIONS') || '';
-    const j = p ? JSON.parse(p) : {};
-    if (j && j.ID) S.dealId = Number(j.ID);
+    // ранний разбор placement_options если есть
+    const po = q.get('placement_options') || q.get('PLACEMENT_OPTIONS') || '';
+    if (!S.dealId && po) {
+      const j = JSON.parse(po);
+      if (j && j.ID) S.dealId = Number(j.ID);
+    }
   } catch {}
 })();
 
+/* --------- helpers --------- */
 function detectMode(raw) {
   const a = A(raw);
   return a.some(v => typeof v === 'string' && String(v).startsWith('DYNAMIC_')) ? 'bindings' : 'ids';
 }
 
-// ————— Data loaders —————
-async function buildUFEnums() {
+/* 1) Сначала строим карту UF_* -> ufCrm* и словари перечислений */
+async function buildUFMeta() {
   const list = await listUserFields(S.typeId);
-  const map = {};
+  const map = {}; // UF_* -> ufCrm*
   for (const f of list) {
-    const code = pick(f, 'FIELD_NAME','fieldName');
-    const uf = pick(f, 'USER_TYPE_ID','userTypeId') || '';
-    // карта соответствий UF_* -> ufCrm*
-    const properKey = pick(f,'FIELD_NAME','fieldName');
-    const apiKey = pick(f,'XML_ID','xmlId') || pick(f,'FIELD_NAME','fieldName');
-    if (code && apiKey) map[properKey] = apiKey; // на всякий случай
+    const xmlId     = pick(f, 'XML_ID', 'xmlId');           // UF_CRM_...
+    const fieldName = pick(f, 'FIELD_NAME', 'fieldName');   // ufCrm...
+    if (xmlId && fieldName) map[xmlId] = fieldName;
 
-    const enums = pick(f, 'LIST','list') || [];
-    if (code && Array.isArray(enums) && enums.length) {
-      enums.forEach(e => putEnum(S.ufEnums, code, pick(e,'ID','VALUE_ID'), pick(e,'VALUE')));
+    // словарь перечислений для enum-полей — ключом делаем UF (xmlId),
+    // чтобы utils.enumText(dict, UF_CODE, value) сработал корректно
+    const enums = pick(f, 'LIST', 'list') || [];
+    if (xmlId && enums.length) {
+      enums.forEach(e => putEnum(S.ufEnums, xmlId, pick(e,'ID','VALUE_ID'), pick(e,'VALUE')));
     }
   }
-  setUfKeyMap(map); // для utils.UF
+  setUfKeyMap(map);   // utils.UF теперь сможет брать по UF-коду
+  return map;
 }
 
+/* 2) Пользователи */
 async function buildUsers(items) {
   const ids = Array.from(new Set(items.map(i => Number(i.assignedById)).filter(Boolean)));
   if (!ids.length) return;
-  const rawMap = await listUsers(ids);
-  for (const id in rawMap) {
-    const u = rawMap[id];
-    S.users[Number(id)] = {
-      name: shortUser(u),
-      path: '/company/personal/user/'+id+'/'
-    };
+  const raw = await listUsers(ids);
+  for (const id in raw) {
+    const u = raw[id];
+    S.users[Number(id)] = { name: shortUser(u), path: '/company/personal/user/'+id+'/' };
   }
 }
 
+/* 3) Стадии */
 async function buildStages(items) {
   const cats = Array.from(new Set(items.map(i => Number(i.categoryId)).filter(Boolean)));
   if (!cats.length) return;
-
   const rows = await listCategoryStages(S.typeId, cats);
+
   rows.forEach(data => {
     const list = Array.isArray(data) ? data : (data?.stages || data?.STAGES) || [];
     list.forEach(st => {
@@ -84,18 +91,23 @@ async function buildStages(items) {
   });
 }
 
+/* Главная загрузка */
 async function loadAll() {
   if (!S.dealId) {
-    $('#rows').innerHTML = `<tr><td colspan="12" class="err">Нет ID сделки</td></tr>`;
+    $('#rows').innerHTML = `<tr><td colspan="12" class="err">Нет ID сделки (можно передать ?dealId=123 для проверки)</td></tr>`;
     return;
   }
 
   const deal = await getDeal(S.dealId);
   if (!deal) {
-    $('#rows').innerHTML = `<tr><td colspan="12" class="err">Deal not found</td></tr>`;
+    $('#rows').innerHTML = `<tr><td colspan="12" class="err">Сделка #${S.dealId} не найдена</td></tr>`;
     return;
   }
 
+  // СНАЧАЛА мета UF (карта + перечисления)
+  const ufMap = await buildUFMeta();
+
+  // Связи из сделки
   const raw = deal[S.field];
   S.mode = detectMode(raw);
   S.bindings = A(raw);
@@ -107,40 +119,47 @@ async function loadAll() {
     : A(raw).map(Number).filter(Boolean);
 
   if (!S.ids.length) {
-    $('#rows').innerHTML = `<tr><td colspan="12" class="muted">Пока нет связанных элементов</td></tr>`;
+    $('#rows').innerHTML = `<tr><td colspan="12" class="muted">В сделке нет связанных элементов</td></tr>`;
     return;
   }
 
-  const select = [
-    'id','title','stageId','categoryId','assignedById',
-    S.F.dealIdSource, S.F.licenseKey, S.F.portalUrl, S.F.tariff, S.F.tariffEnd, S.F.marketEnd, S.F.product
+  // Готовим select: базовые поля + корректные api-имена UF-полей
+  const needUF = [
+    S.F.dealIdSource, S.F.licenseKey, S.F.portalUrl,
+    S.F.tariff, S.F.tariffEnd, S.F.marketEnd, S.F.product
   ];
-  let items = await getItemsByIds(S.typeId, S.ids, select);
+  const ufApiNames = needUF.map(uf => ufMap[uf]).filter(Boolean);
+  const select = ['id','title','stageId','categoryId','assignedById', ...ufApiNames];
 
-  S.items = items;
+  // Читаем элементы
+  S.items = await getItemsByIds(S.typeId, S.ids, select);
 
-  await buildUFEnums();
-  await buildUsers(items);
-  await buildStages(items);
+  // если по какой-то причине REST не вернул UF-поля (редко, но бывает) —
+  // позже utils.UF попробует достать их и без select; но для нас важно,
+  // что список элементов уже есть
+  await buildUsers(S.items);
+  await buildStages(S.items);
+
+  if (!S.items.length) {
+    $('#rows').innerHTML = `<tr><td colspan="12" class="muted">Элементы не найдены (typeId:${S.typeId}, ids:${S.ids.join(', ')})</td></tr>`;
+  }
 }
 
-// ————— Handlers —————
+/* Смена стадии */
 async function onChangeStage(id, newStageId) {
   const ok = await updateItemStage(S.typeId, id, newStageId);
-  if (!ok) {
-    alert('Ошибка смены стадии');
-    return;
-  }
+  if (!ok) { alert('Ошибка смены стадии'); return; }
   const it = S.items.find(i => i.id === id);
   if (it) it.stageId = newStageId;
   render();
 }
 
+/* Открыть карточку */
 function openItem(id) {
   BX24.openPath(`/crm/type/${S.typeId}/details/${id}/`);
 }
 
-// ————— Render glue —————
+/* Рендер */
 function render() {
   applyVisibleColumns(S);
   renderTable(S, {
@@ -151,15 +170,16 @@ function render() {
   fitToIframe();
 }
 
-// ————— Init —————
+/* Init */
 function init() {
   BX24.init(async function() {
-    // если не пришло из раннего boot, пробуем из placement
     if (!S.dealId) {
-      const p = BX24.getParam('PLACEMENT_OPTIONS');
-      try { const j = p ? JSON.parse(p) : {}; if (j && j.ID) S.dealId = Number(j.ID); } catch {}
+      try {
+        const p = BX24.getParam('PLACEMENT_OPTIONS');
+        const j = p ? JSON.parse(p) : {};
+        if (j && j.ID) S.dealId = Number(j.ID);
+      } catch {}
     }
-
     await loadAll();
     bindToolbar(S, { render, reload: init, openItem, changeStage: onChangeStage });
     applyColsModal(S);
@@ -169,6 +189,4 @@ function init() {
 }
 
 init();
-
-// CSP адаптирован воркером. Доп. resize
 window.addEventListener('load', fitToIframe);
