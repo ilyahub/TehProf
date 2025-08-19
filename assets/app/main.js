@@ -90,6 +90,28 @@ const fit = (() => {
 })();
 new ResizeObserver(() => fit()).observe(document.body);
 
+async function hydrateUFsIfMissing(){
+  const need = [
+    F.dealIdSource, F.licenseKey, F.portalUrl,
+    F.tariff, F.tariffEnd, F.marketEnd, F.product
+  ];
+
+  const missing = S.items.some(it => need.some(code => it[code] === undefined));
+  if (!missing) return;
+
+  const calls = {};
+  S.items.forEach((it, i) => (calls['g' + i] = ['crm.item.get', { entityTypeId: S.typeId, id: it.id }]));
+
+  await new Promise(res => BX24.callBatch(calls, rr => {
+    for (const k in rr){
+      if (rr[k].error()) continue;
+      const full = rr[k].data().item;
+      const idx = S.items.findIndex(x => x.id === full.id);
+      if (idx > -1) Object.assign(S.items[idx], full);
+    }
+    res();
+  }, true));
+}
 // ранний ID сделки из POST-BOOT (PLACEMENT_OPTIONS)
 (function fromPost() {
   const boot = window.__BOOT__ || {};
@@ -180,6 +202,7 @@ function load() {
         await buildUFEnums();    // словари списков
         await buildUsers(items); // ответственные
         await buildStages(items);// стадии + фолбэк
+        await hydrateUFsIfMissing();
         render();
         fit();
       }
@@ -255,75 +278,60 @@ async function buildUsers(items) {
   }, true));
 }
 
-// ==== Стадии СПА (основной способ + фолбэк)
-async function buildStages(items) {
+// Стадии смарт-процесса: собираем по категориям без дублей
+async function buildStages(items){
   const cats = Array.from(new Set(items.map(i => Number(i.categoryId)).filter(Boolean)));
-  let anyOk = false;
+  if (!cats.length) return;
 
-  if (cats.length) {
-    const calls = {};
-    cats.forEach((cid,i) => calls['s'+i] = ['crm.category.stage.list', { entityTypeId: S.typeId, categoryId: cid }]);
-    await new Promise(res => BX24.callBatch(calls, r => {
-      for (const k in r) {
-        if (!r[k].error()) {
-          anyOk = true;
-          let data = r[k].data();
-          let list = Array.isArray(data) ? data : (data?.stages || data?.STAGES) || [];
-          if (!Array.isArray(list) && data?.result) list = data.result.stages || data.result.STAGES || [];
-          const cidFromList = Number(list[0]?.categoryId || list[0]?.CATEGORY_ID || cats[0] || 0);
-          list.forEach(st => {
-            const statusId   = String(pick(st,'statusId','STATUS_ID') || '');
-            const name       = String(pick(st,'name','NAME') || statusId);
-            const sort       = Number(pick(st,'sort','SORT') || 0);
-            const categoryId = Number(pick(st,'categoryId','CATEGORY_ID') || cidFromList);
-            const fullId     = String(pick(st,'id','ID') || (categoryId ? `DT${S.typeId}_${categoryId}:${statusId}` : statusId));
-            const obj = { id: fullId, name, sort, categoryId, statusId };
-            S.stagesByFull[fullId] = obj;
-            S.stagesByCatStatus[categoryId+':'+statusId] = obj;
-            if (!S.catStages[categoryId]) S.catStages[categoryId] = [];
-            S.catStages[categoryId].push({ id: fullId, name, sort, statusId });
-          });
-        }
-      }
-      Object.keys(S.catStages).forEach(cid => {
-        S.catStages[cid].sort((a,b) => a.sort - b.sort);
-        const max = S.catStages[cid].length ? Math.max(...S.catStages[cid].map(s => s.sort)) : 100;
-        S.cats[cid] = { maxSort: max || 100 };
-      });
-      res();
-    }, true));
-  }
+  const calls = {};
+  cats.forEach((cid, i) => calls['s' + i] = ['crm.category.stage.list', { entityTypeId: S.typeId, categoryId: cid }]);
 
-  // Фолбэк: старые порталы — через crm.status.list
-  if (!anyOk || !Object.keys(S.stagesByFull).length) {
-    const first = items[0] || {};
-    let cid = Number(first.categoryId) || 0;
-    if (!cid && first.stageId) cid = parseStage(first.stageId).categoryId || 0;
-    if (!cid) return;
-    const ENTITY_ID = `DYNAMIC_${S.typeId}_STAGE_${cid}`;
-    await new Promise(res => {
-      BX24.callMethod('crm.status.list', { filter: { ENTITY_ID } }, rr => {
-        if (!rr.error()) {
-          const list = rr.data() || [];
-          list.forEach(st => {
-            const statusId = String(pick(st,'STATUS_ID','statusId') || '');
-            const name     = String(pick(st,'NAME','name') || statusId);
-            const sort     = Number(pick(st,'SORT','sort') || 0);
-            const fullId   = `DT${S.typeId}_${cid}:${statusId}`;
-            const obj = { id: fullId, name, sort, categoryId: cid, statusId };
-            S.stagesByFull[fullId] = obj;
-            S.stagesByCatStatus[cid+':'+statusId] = obj;
-            if (!S.catStages[cid]) S.catStages[cid] = [];
-            S.catStages[cid].push({ id: fullId, name, sort, statusId });
-          });
-          S.catStages[cid].sort((a,b) => a.sort - b.sort);
-          const max = S.catStages[cid].length ? Math.max(...S.catStages[cid].map(s => s.sort)) : 100;
-          S.cats[cid] = { maxSort: max || 100 };
+  await new Promise(res => BX24.callBatch(calls, r => {
+    // Обнулим перед сборкой, чтобы не плодить дубли при повторных загрузках
+    S.stagesByFull = {};
+    S.stagesByCatStatus = {};
+    S.catStages = {};
+    S.cats = {};
+
+    for (const k in r){
+      if (r[k].error()) continue;
+
+      // Ответ разные порталы отдают по-разному — нормализуем
+      let data = r[k].data();
+      let list = Array.isArray(data) ? data : (data?.stages || data?.STAGES) || [];
+      if (!Array.isArray(list) && data?.result) list = data.result.stages || data.result.STAGES || [];
+
+      list.forEach(stRaw => {
+        const statusId   = String(pick(stRaw, 'statusId', 'STATUS_ID') || '');
+        const name       = String(pick(stRaw, 'name', 'NAME') || statusId);
+        const sort       = Number(pick(stRaw, 'sort', 'SORT') || 0);
+        const categoryId = Number(pick(stRaw, 'categoryId', 'CATEGORY_ID') || pick(list[0] || {}, 'categoryId', 'CATEGORY_ID') || 0);
+        const fullId     = String(pick(stRaw, 'id', 'ID') || (categoryId ? `DT${S.typeId}_${categoryId}:${statusId}` : statusId));
+
+        // карта по полному ID
+        S.stagesByFull[fullId] = { id: fullId, name, sort, categoryId, statusId };
+        // карта по паре categoryId:statusId
+        S.stagesByCatStatus[categoryId + ':' + statusId] = S.stagesByFull[fullId];
+
+        if (!S.catStages[categoryId]) S.catStages[categoryId] = [];
+        // добавляем без дублей по полному ID
+        if (!S.catStages[categoryId].some(s => s.id === fullId)){
+          S.catStages[categoryId].push({ id: fullId, name, sort, statusId });
         }
-        res();
       });
+    }
+
+    // сортировка внутри каждой категории + служебная инфа
+    Object.keys(S.catStages).forEach(cid => {
+      const arr = S.catStages[cid].sort((a, b) => a.sort - b.sort);
+      S.cats[cid] = {
+        list: arr,
+        maxSort: arr.length ? Math.max(...arr.map(s => s.sort)) : 100
+      };
     });
-  }
+
+    res();
+  }, true));
 }
 
 function getStageObject(item) {
@@ -332,14 +340,29 @@ function getStageObject(item) {
   return S.stagesByFull[sid] || S.stagesByCatStatus[(categoryId+':'+statusId)] || { id: sid, name: sid, sort: 0, categoryId };
 }
 
-function stageUi(item) {
+function stageUi(item){
   const st = getStageObject(item);
   const cid = Number(item.categoryId) || st.categoryId || 0;
-  const max = S.cats[cid]?.maxSort || 100;
-  const pct = Math.max(0, Math.min(100, Math.round(((st.sort || 0) / max) * 100)));
-  const list = S.catStages[cid] || [];
-  const opts = list.map(s => `<option value="${s.id}" ${s.id === st.id ? 'selected' : ''}>${s.name}</option>`).join('');
-  return `<div class="stage"><div class="bar"><i style="width:${pct}%"></i></div><span>${st.name}</span><select class="stageSel" data-item="${item.id}" data-cur="${st.id}">${opts}</select></div>`;
+
+  const list = (S.cats[cid]?.list || []);
+  // индекс текущей стадии среди (уже) бездубликатного списка
+  const idx = Math.max(0, list.findIndex(s => s.id === st.id));
+  const steps = list.length > 1 ? (list.length - 1) : 1;
+  const pct = Math.round((idx / steps) * 100);
+
+  const opts = list
+    .map(s => `<option value="${s.id}" ${s.id === st.id ? 'selected' : ''}>${s.name}</option>`)
+    .join('');
+
+  return `
+    <div class="stage">
+      <div class="bar" title="${st.name}"><i style="width:${pct}%"></i></div>
+      <span>${st.name}</span>
+      <select class="stageSel" data-item="${item.id}" data-cur="${st.id}" data-cid="${cid}">
+        ${opts}
+      </select>
+    </div>
+  `;
 }
 
 // ===== фильтрация/сортировка/пагинация
@@ -474,16 +497,22 @@ function render() {
   // события на действия
   ui.rows.querySelectorAll('[data-open]').forEach(n => n.onclick = () => BX24.openPath(`/crm/type/${SMART_ENTITY_TYPE_ID}/details/${n.getAttribute('data-open')}/`));
   ui.rows.querySelectorAll('.stageSel').forEach(sel => {
-    sel.onchange = () => {
-      const newStageId = sel.value, itemId = Number(sel.getAttribute('data-item'));
-      BX24.callMethod('crm.item.update', { entityTypeId: S.typeId, id: itemId, fields: { stageId: newStageId } }, r => {
-        if (r.error()) { alert('Ошибка смены стадии: ' + r.error_description()); sel.value = sel.getAttribute('data-cur'); return; }
-        const it = S.items.find(i => i.id === itemId);
-        if (it) it.stageId = newStageId;
-        render();
-      });
-    };
-  });
+  sel.onchange = () => {
+    const newStageId = sel.value;
+    const itemId = Number(sel.getAttribute('data-item'));
+
+    BX24.callMethod('crm.item.update', { entityTypeId: S.typeId, id: itemId, fields: { stageId: newStageId } }, r => {
+      if (r.error()){
+        alert('Ошибка смены стадии: ' + r.error_description());
+        sel.value = sel.getAttribute('data-cur');
+        return;
+      }
+      const it = S.items.find(i => i.id === itemId);
+      if (it) it.stageId = newStageId; // обновим локально
+      render();
+    });
+  };
+});
   ui.rows.querySelectorAll('[data-del]').forEach(b => b.onclick = () => detach(Number(b.getAttribute('data-del'))));
 }
 
