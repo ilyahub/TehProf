@@ -522,3 +522,12 @@ document.addEventListener('DOMContentLoaded', () => {
     load();
   }
 });
+
+// пинкер
+ui.btnPick?.addEventListener('click', () => {
+  const val = prompt('Введите ID элементов (через запятую):', '');
+  if (!val) return;
+  const ids = val.split(/[,\s]+/).map(s => Number(s)).filter(Boolean);
+  if (!ids.length) return;
+  attach(ids); // у вас уже есть
+});
