@@ -87,3 +87,10 @@ export function parseStage(sid) {
   if (!m) return { typeId: null, categoryId: null, statusId: String(sid || '') };
   return { typeId: Number(m[1]), categoryId: Number(m[2]), statusId: m[3] };
 }
+
+// Короткое имя без отчества: "Фамилия Имя"
+export function shortUser(u) {
+  const last = (pick(u,'LAST_NAME','lastName')||'').trim();
+  const name = (pick(u,'NAME','firstName')||'').trim();
+  return [last, name].filter(Boolean).join(' ');
+}
