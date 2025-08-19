@@ -1,43 +1,28 @@
 // _worker.js
-// Cloudflare Pages/Workers: отдаём единую HTML-страницу «Лицензии»
-// Вся логика виджета (BX24, стейдж-бар, UF-поля, динамическая высота) — внутри HTML ниже.
+// Cloudflare Pages/Workers — отдает страницу "Лицензии" для виджета в Битрикс24.
 
 const HTML = `<!doctype html>
 <html lang="ru">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Лицензии</title>
 <style>
 :root{
-  --bg:#f5f7fb;
-  --card:#fff;
-  --line:#e7ebf2;
-  --text:#1a1f36;
-  --muted:#6b7280;
-  --primary:#3bc8f5;
-  --primary-300:#3eddff;
-  --primary-700:#12b1e3;
-  --danger:#ff5b6a;
+  --bg:#f5f7fb; --card:#fff; --line:#e7ebf2; --text:#1a1f36; --muted:#6b7280;
+  --primary:#3bc8f5; --primary-300:#3eddff; --primary-700:#12b1e3; --danger:#ff5b6a;
 }
-html,body{height:100%}
-*{box-sizing:border-box}
-body{
-  margin:0;background:var(--bg);color:var(--text);
-  font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif;
-}
-.container{max-width:1400px;margin:24px auto;padding:0 16px}
-.header{display:flex;align-items:center;gap:16px;margin-bottom:16px}
+html,body{height:100%} *{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif;}
+.container{max-width:1400px;margin:20px auto;padding:0 16px}
+.header{display:flex;gap:12px;align-items:center;margin-bottom:12px}
 .header h1{margin:0;font-weight:800;letter-spacing:.2px}
 .btn{
-  --ui-btn-background:var(--primary);
-  --ui-btn-background-hover:var(--primary-300);
-  --ui-btn-background-active:var(--primary-700);
-  --ui-btn-border-color:var(--primary);
-  --ui-btn-border-color-hover:var(--primary-300);
-  --ui-btn-border-color-active:var(--primary-700);
+  --ui-btn-background:var(--primary); --ui-btn-background-hover:var(--primary-300);
+  --ui-btn-background-active:var(--primary-700); --ui-btn-border-color:var(--primary);
+  --ui-btn-border-color-hover:var(--primary-300); --ui-btn-border-color-active:var(--primary-700);
   --ui-btn-color:#fff;
-  display:inline-flex;align-items:center;gap:8px;padding:10px 14px;border-radius:10px;
+  display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:10px;
   border:1px solid var(--ui-btn-border-color);background:var(--ui-btn-background);color:var(--ui-btn-color);
   cursor:pointer;font-weight:600;text-decoration:none;white-space:nowrap;
 }
@@ -46,11 +31,16 @@ body{
 .btn.ghost{background:#fff;color:var(--text);border-color:var(--line)}
 .btn.ghost:hover{border-color:var(--primary);color:var(--primary)}
 .btn.danger{background:var(--danger);border-color:var(--danger)}
-.controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 12px 0;margin-bottom:12px}
 
-/* Таблица */
-.table-wrap{min-height:420px;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:14px}
+.right{margin-left:auto;display:flex;gap:8px;align-items:center}
+
+.table-wrap{
+  overflow:auto; background:#fff; border:1px solid var(--line); border-radius:14px;
+  /* ключ: ограничиваем высоту в пределах окна, без бесконечного хвоста */
+  max-height:calc(100vh - 170px);
+  /* без фиксированной высоты — BX24.fitWindow подгоняет iFrame */
+}
+
 table{width:100%;border-collapse:separate;border-spacing:0}
 thead th{
   position:sticky;top:0;background:#fff;z-index:2;padding:10px 12px;border-bottom:1px solid var(--line);
@@ -62,6 +52,10 @@ th:last-child,td:last-child{border-right:0;border-top-right-radius:14px}
 tr:last-child td{border-bottom:0}
 a.link{color:#2471d6;text-decoration:none}
 a.link:hover{text-decoration:underline}
+
+/* фильтры в хедерах */
+th .filter{display:block;margin-top:6px}
+th .filter input{width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:8px}
 
 /* Stage bar */
 .crm-list-stage-bar{min-width:260px}
@@ -89,23 +83,36 @@ a.link:hover{text-decoration:underline}
 .stage-menu-item:hover{background:#f1f4fb}
 .stage-menu-item.active{background:#e9f7ff}
 
-.right{display:flex;justify-content:flex-end;gap:8px}
+/* меню колонок */
+.cols{
+  position:relative;
+}
+.cols-menu{
+  position:absolute;left:0;top:100%;margin-top:8px;background:#fff;border:1px solid var(--line);
+  border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.08);padding:8px;display:none;z-index:10;min-width:260px
+}
+.cols-menu.open{display:block}
+.cols-menu label{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;cursor:pointer}
+.cols-menu label:hover{background:#f6f7fb}
 
-/* фильтры в заголовке */
-th .filter{display:block;margin-top:6px}
-th .filter input{width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:8px}
+.hidden{display:none !important}
 </style>
 </head>
 <body>
 <div class="container">
   <div class="header">
     <h1>Лицензии</h1>
-    <div class="controls">
-      <button id="btnNew" class="btn">Новый элемент</button>
-      <button id="btnPick" class="btn ghost">Выбрать элемент</button>
-      <button id="btnRefresh" class="btn ghost">Обновить</button>
+
+    <button id="btnNew" class="btn">Новый элемент</button>
+    <button id="btnPick" class="btn ghost">Выбрать элемент</button>
+    <button id="btnRefresh" class="btn ghost">Обновить</button>
+
+    <div class="cols">
+      <button id="btnCols" class="btn ghost">Колонки</button>
+      <div id="colsMenu" class="cols-menu"></div>
     </div>
-    <div class="right" style="margin-left:auto">
+
+    <div class="right">
       <label>Показывать по:
         <select id="pageSize">
           <option>10</option><option>30</option><option>50</option><option>100</option>
@@ -116,28 +123,7 @@ th .filter input{width:100%;padding:6px 8px;border:1px solid var(--line);border-
 
   <div class="table-wrap">
     <table id="grid">
-      <thead>
-        <tr>
-          <th style="width:64px">ID</th>
-          <th style="min-width:340px">Название
-            <span class="filter"><input id="fltTitle" placeholder="Фильтр по названию"></span>
-          </th>
-          <th style="min-width:220px">Ответственный
-            <span class="filter"><input id="fltResp" placeholder="Фильтр по ответственному"></span>
-          </th>
-          <th style="min-width:320px">Стадия
-            <span class="filter"><input id="fltStage" placeholder="Фильтр по стадии"></span>
-          </th>
-          <th style="min-width:140px">ID исходной сделки</th>
-          <th style="min-width:220px">Лицензионный ключ</th>
-          <th style="min-width:220px">Адрес портала</th>
-          <th style="min-width:160px">Текущий тариф</th>
-          <th style="min-width:160px">Окончание тарифа</th>
-          <th style="min-width:180px">Окончание подписки (Маркет)</th>
-          <th style="min-width:140px">Продукт</th>
-          <th style="width:160px">Действия</th>
-        </tr>
-      </thead>
+      <thead id="thead"></thead>
       <tbody id="rows"></tbody>
     </table>
   </div>
@@ -145,7 +131,8 @@ th .filter input{width:100%;padding:6px 8px;border:1px solid var(--line);border-
 
 <script src="https://api.bitrix24.com/api/v1/"></script>
 <script>
-const ENTITY_TYPE_ID = 1032; // ваш смарт-процесс
+/*** Конфиг ***/
+const ENTITY_TYPE_ID = 1032;
 const F = {
   dealIdSource : 'UF_CRM_10_1717328665682',
   licenseKey   : 'UF_CRM_10_1717328730625',
@@ -156,13 +143,33 @@ const F = {
   product      : 'UF_CRM_10_1717329453779',
 };
 
+/* Список колонок c id для менеджера колонок */
+const COLS = [
+  {id:'id',        title:'ID',               min:64,  render: (it)=> it.id },
+  {id:'title',     title:'Название',         min:340, render: (it)=> '<a class="link" target="_top" href="/crm/type/'+ENTITY_TYPE_ID+'/details/'+it.id+'/">'+escapeHtml(it.title||'Без названия')+'</a>',
+                   filter:'fltTitle'},
+  {id:'resp',      title:'Ответственный',    min:220, render: (it)=> linkUser(S.users.get(Number(it.assignedById))) ,
+                   filter:'fltResp'},
+  {id:'stage',     title:'Стадия',           min:320, render: renderStageBar, filter:'fltStage'},
+  {id:'src',       title:'ID исходной сделки', min:140, render: (it)=> escapeHtml(UF(it,F.dealIdSource) || '—')},
+  {id:'key',       title:'Лицензионный ключ',  min:200, render: (it)=> escapeHtml(UF(it,F.licenseKey) || '—') },
+  {id:'portal',    title:'Адрес портала',      min:220, render: (it)=> escapeHtml(UF(it,F.portalUrl)  || '—') },
+  {id:'tariff',    title:'Текущий тариф',      min:160, render: (it)=> getEnumName(F.tariff, UF(it,F.tariff)) || '—'},
+  {id:'tariffEnd', title:'Окончание тарифа',   min:160, render: (it)=> dateFmt(UF(it,F.tariffEnd)) },
+  {id:'marketEnd', title:'Окончание подписки', min:180, render: (it)=> dateFmt(UF(it,F.marketEnd)) },
+  {id:'product',   title:'Продукт',            min:140, render: (it)=> getEnumName(F.product, UF(it,F.product)) || '—'},
+  {id:'actions',   title:'Действия',           min:160, render: renderActions }
+];
+
+const STORAGE_KEY = 'lic-widget-columns-v1';
+
 const ui = {
+  thead:  () => document.getElementById('thead'),
   rows:   () => document.getElementById('rows'),
   grid:   () => document.getElementById('grid'),
   size:   () => document.getElementById('pageSize'),
-  fTitle: () => document.getElementById('fltTitle'),
-  fResp:  () => document.getElementById('fltResp'),
-  fStage: () => document.getElementById('fltStage'),
+  colsBtn:() => document.getElementById('btnCols'),
+  colsMenu:() => document.getElementById('colsMenu'),
 };
 
 const S = {
@@ -173,37 +180,40 @@ const S = {
   enums: {},
   pageSize: 10,
   filters: { title:'', resp:'', stage:'' },
+  visibleCols: loadCols()
 };
 
 function fit(){ try{ BX24&&BX24.fitWindow(); }catch(e){} }
-function setTableHeight(){
-  const wrap = document.querySelector('.table-wrap');
-  if(!wrap) return;
-  const rect = wrap.getBoundingClientRect();
-  const marginBottom = 16;
-  const h = Math.max(320, window.innerHeight - rect.top - marginBottom);
-  wrap.style.height = h + 'px';
+
+function loadCols(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(raw){ return JSON.parse(raw); }
+  }catch(e){}
+  // дефолт: все видимы
+  const vis = {};
+  COLS.forEach(c=>vis[c.id]=true);
+  return vis;
 }
+function saveCols(){
+  try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(S.visibleCols)); }catch(e){}
+}
+
+function escapeHtml(s){ return String(s??'').replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])) }
 function dateFmt(v){
   if(!v) return '—';
   const d = new Date(v);
-  if(isNaN(d)) return String(v);
-  return d.toLocaleDateString();
+  return isNaN(d) ? String(v) : d.toLocaleDateString();
 }
-function linkUser(user){
-  if(!user) return '—';
-  const name = [user.LAST_NAME,user.NAME,user.SECOND_NAME].filter(Boolean).join(' ');
-  const title = name || user.LOGIN || ('ID '+user.ID);
-  const href = '/company/personal/user/'+user.ID+'/';
-  return '<a class="link" target="_top" href="'+href+'">'+escapeHtml(title)+'</a>';
-}
-function escapeHtml(s){
-  return String(s??'').replace(/[&<>"']/g, function(m){return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])});
+function linkUser(u){
+  if(!u) return '—';
+  const name = [u.LAST_NAME,u.NAME,u.SECOND_NAME].filter(Boolean).join(' ') || u.LOGIN || ('ID '+u.ID);
+  return '<a class="link" target="_top" href="/company/personal/user/'+u.ID+'/">'+escapeHtml(name)+'</a>';
 }
 function UF(item, code){
   if(!item||!code) return undefined;
-  const src = item.item || (item.result&&item.result.item) || item;
-  const lc = code.toLowerCase();
+  const src = item.item || item;
+  const lc  = code.toLowerCase();
   if(src[code] !== undefined) return normUF(src[code]);
   for(const k in src){ if(String(k).toLowerCase()===lc) return normUF(src[k]); }
   const f = src.fields || src.FIELDS || {};
@@ -221,11 +231,29 @@ function normUF(v){
   return v;
 }
 
-function bCall(m,p){ return new Promise(function(res,rej){ BX24.callMethod(m,p,function(r){ r.error()?rej(r):res(r.data()) }); }); }
+function getEnumName(code, val){
+  const map = S.enums[code];
+  if(!map) return undefined;
+  return map.get(String(val)) || undefined;
+}
+
+/*** Надёжная обёртка над BX24.callMethod — в reject отдаём Error со строкой ***/
+function bCall(method, params){
+  return new Promise((resolve, reject)=>{
+    BX24.callMethod(method, params, function(r){
+      if(r && typeof r.error === 'function' && r.error()){
+        const msg = (typeof r.error_description === 'function' ? r.error_description() : r.error_description) || r.error();
+        reject(new Error(method + ': ' + msg));
+      }else{
+        try{ resolve(r.data()); }catch(e){ reject(new Error(method + ': пустой ответ')); }
+      }
+    });
+  });
+}
 
 async function loadStages(){
   const res = await bCall('crm.category.stage.list',{ entityTypeId: ENTITY_TYPE_ID });
-  res.forEach(function(st){
+  res.forEach(st=>{
     S.stageMap.set(st.statusId||st.STATUS_ID, {
       ID: st.statusId||st.STATUS_ID,
       NAME: st.name||st.NAME,
@@ -234,36 +262,33 @@ async function loadStages(){
     });
   });
   const byCat = new Map();
-  res.forEach(function(st){
+  res.forEach(st=>{
     const cat = st.categoryId||st.CATEGORY_ID;
     const id  = st.statusId||st.STATUS_ID;
     if(!byCat.has(cat)) byCat.set(cat,[]);
     byCat.get(cat).push(id);
   });
-  for(const kv of byCat){
-    const cat = kv[0], arr = kv[1];
-    arr.sort(function(a,b){return (S.stageMap.get(a)?.SORT||0)-(S.stageMap.get(b)?.SORT||0)});
+  for(const [cat, arr] of byCat.entries()){
+    arr.sort((a,b)=>(S.stageMap.get(a)?.SORT||0)-(S.stageMap.get(b)?.SORT||0));
     S.stageOrderByCat.set(cat, arr);
   }
 }
 
 async function loadEnums(){
   const desc = await bCall('crm.item.fields', { entityTypeId: ENTITY_TYPE_ID });
-  const fTar = (desc&&desc[F.tariff]&&(desc[F.tariff].items||desc[F.tariff].VALUES||desc[F.tariff].ENUM)) || [];
-  const fProd= (desc&&desc[F.product]&&(desc[F.product].items||desc[F.product].VALUES||desc[F.product].ENUM)) || [];
-  function map(list){ const m=new Map(); (list||[]).forEach(function(e){ m.set(String(e.ID||e.VALUE), e.VALUE||e.NAME||e.TITLE); }); return m; }
-  S.enums[F.tariff]  = map(fTar);
-  S.enums[F.product] = map(fProd);
+  function mapFrom(field){ const list = (field?.items||field?.VALUES||field?.ENUM)||[]; const m=new Map(); list.forEach(e=>m.set(String(e.ID||e.VALUE), e.VALUE||e.NAME||e.TITLE)); return m; }
+  S.enums[F.tariff]  = mapFrom(desc[F.tariff]  || {});
+  S.enums[F.product] = mapFrom(desc[F.product] || {});
 }
 
 async function loadUsers(ids){
-  const need = ids.filter(function(id){return !S.users.has(id)});
+  const need = ids.filter(id=>!S.users.has(id));
   if(!need.length) return;
   const CHUNK=50;
   for(let i=0;i<need.length;i+=CHUNK){
-    const portion = need.slice(i,i+CHUNK);
-    const res = await bCall('user.get',{ ID: portion });
-    res.forEach(function(u){ S.users.set(Number(u.ID), u); });
+    const part = need.slice(i,i+CHUNK);
+    const res = await bCall('user.get',{ ID: part });
+    res.forEach(u=>S.users.set(Number(u.ID), u));
   }
 }
 
@@ -272,145 +297,164 @@ async function loadItems(){
     F.dealIdSource, F.licenseKey, F.portalUrl, F.tariff, F.tariffEnd, F.marketEnd, F.product];
   const res = await bCall('crm.item.list', { entityTypeId: ENTITY_TYPE_ID, select, filter:{}, order:{ id:'desc' }, start:-1 });
   S.items = Array.isArray(res) ? res : (res.items||res.result||[]);
-  const uids = Array.from(new Set(S.items.map(function(i){return Number(i.assignedById||i.ASSIGNED_BY_ID)}).filter(Boolean)));
+  const uids = Array.from(new Set(S.items.map(i=>Number(i.assignedById)).filter(Boolean)));
   await loadUsers(uids);
 }
 
+/*** Stage bar ***/
 function renderStageBar(item){
-  const stageId   = String(item.stageId || item.STAGE_ID || '');
-  const catId     = Number(item.categoryId || item.CATEGORY_ID || 0);
-  const order     = S.stageOrderByCat.get(catId) || [];
-  const curIdx    = Math.max(0, order.indexOf(stageId));
-  const curTitle  = (S.stageMap.get(stageId)&&S.stageMap.get(stageId).NAME) || stageId || '—';
+  const stageId = String(item.stageId||'');
+  const catId   = Number(item.categoryId||0);
+  const order   = S.stageOrderByCat.get(catId) || [];
+  const idx     = Math.max(0, order.indexOf(stageId));
+  const curName = (S.stageMap.get(stageId)?.NAME) || stageId || '—';
 
-  var tds = '';
+  let tds = '';
   for(let i=0;i<order.length;i++){
-    const sid = order[i];
-    const cls = (i<curIdx)?'stage-done':(i===curIdx)?'stage-current':'stage-future';
-    tds += '<td class="crm-list-stage-bar-part '+cls+'">'+
-             '<div class="crm-list-stage-bar-block"><div class="crm-list-stage-bar-btn"></div></div>'+
-           '</td>';
+    const cls = i<idx ? 'stage-done' : (i===idx?'stage-current':'stage-future');
+    tds += '<td class="crm-list-stage-bar-part '+cls+'"><div class="crm-list-stage-bar-block"><div class="crm-list-stage-bar-btn"></div></div></td>';
   }
-  var menu = '';
+  let menu = '';
   for(const sid of order){
-    const name = escapeHtml((S.stageMap.get(sid)&&S.stageMap.get(sid).NAME)||sid);
-    menu += '<div class="stage-menu-item '+(sid===stageId?'active':'')+'" data-sid="'+escapeHtml(sid)+'">'+name+'</div>';
+    const nm = escapeHtml(S.stageMap.get(sid)?.NAME || sid);
+    menu += '<div class="stage-menu-item '+(sid===stageId?'active':'')+'" data-sid="'+escapeHtml(sid)+'">'+nm+'</div>';
   }
-  return ''+
-    '<div class="stage-select" data-id="'+item.id+'">'+
-      '<div class="crm-list-stage-bar">'+
-        '<table class="crm-list-stage-bar-table"><tbody><tr>'+ (tds||'<td style="color:#999">Нет стадий</td>') +'</tr></tbody></table>'+
-      '</div>'+
-      '<div class="crm-list-stage-bar-title">'+escapeHtml(curTitle)+'</div>'+
-      '<button class="toggle" title="Сменить стадию">▾</button>'+
-      '<div class="stage-menu">'+menu+'</div>'+
-    '</div>';
+  return '<div class="stage-select" data-id="'+item.id+'">'+
+           '<div class="crm-list-stage-bar"><table class="crm-list-stage-bar-table"><tbody><tr>'+ (tds||'<td style="color:#999">Нет стадий</td>') +'</tr></tbody></table></div>'+
+           '<div class="crm-list-stage-bar-title">'+escapeHtml(curName)+'</div>'+
+           '<button class="toggle" title="Сменить стадию">▾</button>'+
+           '<div class="stage-menu">'+menu+'</div>'+
+         '</div>';
 }
-
 function bindStageControls(rowEl, item){
-  const holder = rowEl.querySelector('.stage-select');
-  if(!holder) return;
-  const btn = holder.querySelector('.toggle');
+  const holder = rowEl.querySelector('.stage-select'); if(!holder) return;
+  const btn  = holder.querySelector('.toggle');
   const menu = holder.querySelector('.stage-menu');
-  btn.addEventListener('click', function(e){
+  btn.addEventListener('click', e=>{
     e.stopPropagation();
-    document.querySelectorAll('.stage-menu.open').forEach(function(m){m.classList.remove('open')});
+    document.querySelectorAll('.stage-menu.open').forEach(m=>m.classList.remove('open'));
     menu.classList.toggle('open');
   });
-  menu.addEventListener('click', async function(e){
+  menu.addEventListener('click', async e=>{
     const el = e.target.closest('.stage-menu-item'); if(!el) return;
-    const sid = el.dataset.sid;
-    menu.classList.remove('open');
-    await changeStage(item, sid);
+    const sid = el.dataset.sid; menu.classList.remove('open');
+    try{
+      await bCall('crm.item.update',{ entityTypeId: ENTITY_TYPE_ID, id: item.id, fields:{ stageId: sid }});
+      item.stageId = sid; render();
+    }catch(err){ alert('Не удалось сменить стадию: ' + err.message); }
   });
-  document.addEventListener('click', function(){ menu.classList.remove('open'); });
+  document.addEventListener('click', ()=>menu.classList.remove('open'));
 }
 
-async function changeStage(item, newStageId){
-  try{
-    await bCall('crm.item.update',{ entityTypeId: ENTITY_TYPE_ID, id: item.id, fields:{ stageId: newStageId }});
-    item.stageId = newStageId;
-    render();
-  }catch(e){ alert('Не удалось сменить стадию: '+(e.error_description||e)); }
+/*** Actions ***/
+function renderActions(it){
+  return '<a class="btn ghost" target="_top" href="/crm/type/'+ENTITY_TYPE_ID+'/details/'+it.id+'/">Открыть</a> '+
+         '<button class="btn danger btn-del" data-id="'+it.id+'">Удалить</button>';
 }
 
+/*** Фильтрация/рендер ***/
 function applyFilters(list){
   const t = S.filters.title.trim().toLowerCase();
   const r = S.filters.resp.trim().toLowerCase();
   const s = S.filters.stage.trim().toLowerCase();
-  return list.filter(function(it){
+  return list.filter(it=>{
     const title = String(it.title||'').toLowerCase();
     const user  = S.users.get(Number(it.assignedById))||{};
     const uname = [user.LAST_NAME,user.NAME,user.SECOND_NAME].filter(Boolean).join(' ').toLowerCase();
-    const st    = ((S.stageMap.get(String(it.stageId))&&S.stageMap.get(String(it.stageId)).NAME) || String(it.stageId||'')).toLowerCase();
+    const st    = (S.stageMap.get(String(it.stageId))?.NAME || String(it.stageId||'')).toLowerCase();
     return (!t || title.includes(t)) && (!r || uname.includes(r)) && (!s || st.includes(s));
   });
 }
 
-function render(){
-  const root = ui.rows();
-  root.innerHTML = '';
-  let list = applyFilters(S.items).slice(0, S.pageSize);
-  for(const it of list){
-    const user = S.users.get(Number(it.assignedById));
-    const tariffName  = (S.enums[F.tariff]&&S.enums[F.tariff].get(String(UF(it,F.tariff)))) || UF(it,F.tariff) || '—';
-    const productName = (S.enums[F.product]&&S.enums[F.product].get(String(UF(it,F.product))))|| UF(it,F.product)|| '—';
-
-    const tr = document.createElement('tr');
-    tr.innerHTML =
-      '<td>'+it.id+'</td>'+
-      '<td><a class="link" target="_top" href="/crm/type/'+ENTITY_TYPE_ID+'/details/'+it.id+'/">'+escapeHtml(it.title||'Без названия')+'</a></td>'+
-      '<td>'+linkUser(user)+'</td>'+
-      '<td>'+renderStageBar(it)+'</td>'+
-      '<td>'+escapeHtml(UF(it,F.dealIdSource) || '—')+'</td>'+
-      '<td>'+escapeHtml(UF(it,F.licenseKey)   || '—')+'</td>'+
-      '<td>'+escapeHtml(UF(it,F.portalUrl)    || '—')+'</td>'+
-      '<td>'+escapeHtml(tariffName)+'</td>'+
-      '<td>'+dateFmt(UF(it,F.tariffEnd))+'</td>'+
-      '<td>'+dateFmt(UF(it,F.marketEnd))+'</td>'+
-      '<td>'+escapeHtml(productName)+'</td>'+
-      '<td class="right">'+
-        '<a class="btn ghost" target="_top" href="/crm/type/'+ENTITY_TYPE_ID+'/details/'+it.id+'/">Открыть</a> '+
-        '<button class="btn danger btn-del" data-id="'+it.id+'">Удалить</button>'+
-      '</td>';
-    root.appendChild(tr);
-    bindStageControls(tr, it);
-  }
-  root.querySelectorAll('.btn-del').forEach(function(b){
-    b.addEventListener('click', async function(e){
-      const id = Number(e.currentTarget.dataset.id);
-      if(!confirm('Удалить элемент #'+id+'?')) return;
-      try{
-        await bCall('crm.item.delete',{ entityTypeId: ENTITY_TYPE_ID, id });
-        S.items = S.items.filter(function(x){return x.id!==id});
-        render();
-      }catch(err){
-        alert('Удаление не удалось: ' + (err.error_description||err));
-      }
-    });
+function buildHeader(){
+  const vis = S.visibleCols;
+  const th = [];
+  const fltInputs = {};
+  COLS.forEach(c=>{
+    if(!vis[c.id]) return;
+    let html = '<th style="min-width:'+ (c.min||140) +'px">'+escapeHtml(c.title);
+    if(c.filter){
+      const pid = c.filter;
+      html += '<span class="filter"><input id="'+pid+'" placeholder="Фильтр по '+escapeHtml(c.title.toLowerCase())+'"></span>';
+    }
+    html += '</th>';
+    th.push(html);
   });
-  setTableHeight(); fit();
+  ui.thead().innerHTML = '<tr>'+th.join('')+'</tr>';
+
+  // вешаем слушатели фильтров
+  const t = document.getElementById('fltTitle'); if(t) t.addEventListener('input', e=>{ S.filters.title = e.target.value; render(); });
+  const r = document.getElementById('fltResp');  if(r) r.addEventListener('input', e=>{ S.filters.resp = e.target.value; render(); });
+  const s = document.getElementById('fltStage'); if(s) s.addEventListener('input', e=>{ S.filters.stage = e.target.value; render(); });
 }
 
+function render(){
+  buildHeader();
+
+  const body = ui.rows(); body.innerHTML = '';
+  const vis = S.visibleCols;
+  const list = applyFilters(S.items).slice(0, S.pageSize);
+
+  for(const it of list){
+    const tr = document.createElement('tr');
+    const tds = [];
+    for(const c of COLS){
+      if(!vis[c.id]) continue;
+      tds.push('<td class="'+c.id+'">'+ c.render(it) +'</td>');
+    }
+    tr.innerHTML = tds.join('');
+    body.appendChild(tr);
+
+    // повесить обработчики на стадию и удалить
+    bindStageControls(tr, it);
+    tr.querySelectorAll('.btn-del').forEach(b=>{
+      b.addEventListener('click', async (e)=>{
+        const id = Number(e.currentTarget.dataset.id);
+        if(!confirm('Удалить элемент #'+id+'?')) return;
+        try{
+          await bCall('crm.item.delete',{ entityTypeId: ENTITY_TYPE_ID, id });
+          S.items = S.items.filter(x=>x.id!==id);
+          render();
+        }catch(err){ alert('Удаление не удалось: '+ err.message); }
+      });
+    });
+  }
+  fit();
+}
+
+/*** Меню колонок ***/
+function buildColsMenu(){
+  const menu = ui.colsMenu(); menu.innerHTML = '';
+  COLS.forEach(c=>{
+    const id='col_'+c.id;
+    const lab = document.createElement('label'); lab.htmlFor=id;
+    lab.innerHTML = '<input type="checkbox" id="'+id+'" '+(S.visibleCols[c.id]?'checked':'')+'> '+escapeHtml(c.title);
+    menu.appendChild(lab);
+    lab.querySelector('input').addEventListener('change', e=>{
+      S.visibleCols[c.id] = e.target.checked;
+      saveCols(); render();
+    });
+  });
+}
+function wireCols(){
+  buildColsMenu();
+  const btn = ui.colsBtn(), menu = ui.colsMenu();
+  btn.addEventListener('click', (e)=>{
+    e.stopPropagation(); menu.classList.toggle('open');
+  });
+  document.addEventListener('click', ()=>menu.classList.remove('open'));
+}
+
+/*** UI, загрузка ***/
 function wireUi(){
   ui.size().value = String(S.pageSize);
-  ui.size().addEventListener('change', function(){
-    S.pageSize = Number(ui.size().value)||10; render();
-  });
-  ui.fTitle().addEventListener('input', function(e){ S.filters.title = e.target.value; render(); });
-  ui.fResp().addEventListener('input',  function(e){ S.filters.resp  = e.target.value; render(); });
-  ui.fStage().addEventListener('input', function(e){ S.filters.stage = e.target.value; render(); });
+  ui.size().addEventListener('change', ()=>{ S.pageSize = Number(ui.size().value)||10; render(); });
 
   document.getElementById('btnRefresh').addEventListener('click', bootstrap);
-  document.getElementById('btnNew').addEventListener('click', function(){
-    BX24.openPath('/crm/type/'+ENTITY_TYPE_ID+'/details/0/');
-  });
-  document.getElementById('btnPick').addEventListener('click', function(){
-    BX24.openPath('/crm/type/'+ENTITY_TYPE_ID+'/list/');
-  });
+  document.getElementById('btnNew').addEventListener('click', ()=> BX24.openPath('/crm/type/'+ENTITY_TYPE_ID+'/details/0/'));
+  document.getElementById('btnPick').addEventListener('click', ()=> BX24.openPath('/crm/type/'+ENTITY_TYPE_ID+'/list/'));
 
-  window.addEventListener('resize', function(){ setTableHeight(); fit(); });
-  new ResizeObserver(function(){ setTableHeight(); fit(); }).observe(document.body);
+  wireCols();
 }
 
 async function bootstrap(){
@@ -419,20 +463,22 @@ async function bootstrap(){
     await loadEnums();
     await loadItems();
     render();
-  }catch(e){
-    console.error(e);
-    alert('Ошибка загрузки: '+(e.error_description||e));
+  }catch(err){
+    console.error(err);
+    alert('Ошибка загрузки: ' + (err.message||err));
   }
 }
 
+/*** Инициализация ***/
 (function init(){
   const inFrame = (window.top !== window);
   if(!inFrame || typeof BX24 === 'undefined'){
-    document.body.innerHTML = '<div class="container"><div class="card">Эта страница должна открываться внутри портала Битрикс24 (iframe). BX24 SDK недоступен.</div></div>';
+    document.body.innerHTML = '<div class="container"><div class="table-wrap" style="padding:16px">Эта страница должна открываться внутри портала Битрикс24 (iframe). BX24 SDK недоступен.</div></div>';
     return;
   }
-  BX24.init(function(){
-    wireUi(); setTableHeight(); bootstrap();
+  BX24.init(()=>{
+    wireUi();
+    bootstrap();
   });
 })();
 </script>
@@ -440,12 +486,11 @@ async function bootstrap(){
 </html>`;
 
 export default {
-  async fetch(request, env, ctx) {
-    // Можно добавить свои маршруты, но по умолчанию отдаём одну страницу
+  async fetch(_req, _env, _ctx) {
     return new Response(HTML, {
       headers: {
         'content-type': 'text/html; charset=utf-8',
-        'cache-control': 'no-store, no-cache, must-revalidate'
+        'cache-control': 'no-store'
       }
     });
   }
