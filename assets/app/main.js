@@ -82,19 +82,62 @@ const lighten=(hex,p=0.15)=>{ // hex -> lighter
   return `rgb(${lr}, ${lg}, ${lb})`;
 };
 
+// Кэш метаданных UF и карта соответствий UF_* -> ufCrm*
+async function ensureUFMeta(){
+  if (window.__UF_READY) return;
+  await new Promise(res => {
+    BX24.callMethod('crm.item.fields', { entityTypeId: S.typeId }, rr => {
+      window.__UF_KEYMAP = {};                    // например: { 'UF_CRM_10_...': 'ufCrm10_...' }
+      window.__UF_SELECT = [];                    // что подставлять в select
+      if (!rr.error()){
+        const fields = rr.data().fields || rr.data() || {};
+        for (const key in fields){
+          const meta = fields[key] || {};
+          const upper = meta.upperName || key.toUpperCase();
+          const isUf = upper.startsWith('UF_') || /^ufcrm/i.test(key);
+          if (!isUf) continue;
+
+          // карта: верхний регистр -> фактический ключ в item
+          window.__UF_KEYMAP[upper] = key;
+
+          // чтобы точно получить значения, просим Оба варианта
+          window.__UF_SELECT.push(upper);
+          if (!window.__UF_SELECT.includes(key)) window.__UF_SELECT.push(key);
+
+          // из мета сразу соберём словари для enum
+          if (meta.type === 'enumeration' && Array.isArray(meta.items)){
+            S.ufEnums = S.ufEnums || {};
+            S.ufEnums[upper] = {};
+            meta.items.forEach(it => {
+              const id = Number(it.ID);
+              const val = String(it.VALUE || id);
+              if (id) S.ufEnums[upper][id] = val;
+            });
+          }
+        }
+      }
+      window.__UF_READY = true;
+      res();
+    });
+  });
+}
+
 // LOAD
-function load(){
-  if(!S.dealId){
+async function load(){
+  if (!S.dealId){
     ui.rows.innerHTML = '<tr><td colspan="12" class="err">Нет ID сделки</td></tr>';
     return;
   }
 
+  // 0) Метаданные UF и карта соответствий
+  await ensureUFMeta();
+
+  // 1) Определяем ids
   BX24.callMethod('crm.deal.get', { id: S.dealId }, r => {
     if (r.error()){
       ui.rows.innerHTML = `<tr><td colspan="12" class="err">${r.error_description()}</td></tr>`;
       return;
     }
-
     const raw = r.data()[S.field];
     S.mode = detectMode(raw);
     S.bindings = A(raw);
@@ -108,16 +151,15 @@ function load(){
       return;
     }
 
-    // ⚠️ ВАЖНО: ЯВНО перечисляем все нужные поля, иначе UF не придут
-    const select = [
-      'id','title','stageId','categoryId','assignedById',
-      F.dealIdSource, F.licenseKey, F.portalUrl, F.tariff,
-      F.tariffEnd, F.marketEnd, F.product
-    ];
+    // 2) Явный select (базовые + оба варианта UF-ключей)
+    const base = ['id','title','stageId','categoryId','assignedById'];
+    const select = base
+      .concat(window.__UF_SELECT || [])
+      .filter((v, i, a) => a.indexOf(v) === i); // уникализируем
 
     BX24.callMethod('crm.item.list', {
       entityTypeId: S.typeId,
-      filter: {'@id': S.ids},
+      filter: { '@id': S.ids },
       select
     }, async rr => {
       let items = [];
@@ -125,12 +167,33 @@ function load(){
 
       S.items = items;
 
-      await buildUFEnums();
+      // users + стадии (как было)
       await buildUsers(items);
       await buildStages(items);
 
-      // если что-то всё ещё не пришло — дотягиваем точечно
-      await hydrateUFsIfEmpty();
+      // 3) Если хотя бы у одного элемента UF пуст, дотягиваем crm.item.get
+      const need = [
+        F.dealIdSource, F.licenseKey, F.portalUrl,
+        F.tariff, F.tariffEnd, F.marketEnd, F.product
+      ];
+      const empty = it => need.some(code => {
+        const v = UF(it, code);
+        return v === undefined || v === null || v === '';
+      });
+
+      if (S.items.some(empty)) {
+        const calls = {};
+        S.items.forEach((it, i) => calls['g' + i] = ['crm.item.get', { entityTypeId: S.typeId, id: it.id }]);
+        await new Promise(res => BX24.callBatch(calls, rr2 => {
+          for (const k in rr2){
+            if (rr2[k].error()) continue;
+            const full = rr2[k].data().item;
+            const idx = S.items.findIndex(x => x.id === full.id);
+            if (idx > -1) Object.assign(S.items[idx], full);
+          }
+          res();
+        }, true));
+      }
 
       render();
       fit();
