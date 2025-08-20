@@ -8,6 +8,7 @@ import {
   listUsers,
   listCategoryStages,
   updateDealLinkedIds,
+  updateItemStage,        // ← добавь это
   openBxPath,
   smartItemPath,
   searchSmartItems,
@@ -122,15 +123,30 @@ async function buildStages(items) {
   S.stagesByCat = dict;
 }
 function stageSegbar(it) {
-  const { categoryId, statusId } = parseStage(it.stageId);
+  const { typeId, categoryId, statusId } = parseStage(it.stageId);
   const pack = S.stagesByCat[Number(categoryId)] || { order: [], byId: {} };
   const idx  = Math.max(0, pack.order.indexOf(statusId));
+
   const segs = pack.order.map((sid,i) => {
     const st = pack.byId[sid] || {};
     const cls = i < idx ? 'done' : (i === idx ? 'now' : '');
     return `<i class="${cls}" style="background:${st.COLOR||'#a5b4fc'}" data-tip="${st.NAME||sid}"></i>`;
   }).join('');
-  return `<div class="segbar">${segs || ''}</div>`;
+
+  // префикс полного stageId для SPA: DT{TYPE}_{CATEGORY}:
+  const prefix = `DT${typeId || ${SMART_ENTITY_TYPE_ID}}_${categoryId}:`;
+  const opts = pack.order.map(sid => {
+    const st = pack.byId[sid] || {};
+    return `<option value="${prefix}${sid}" ${sid===statusId?'selected':''}>${st.NAME||sid}</option>`;
+  }).join('');
+
+  return `
+    <div class="stage">
+      <div class="segbar">${segs || ''}</div>
+      <select class="stageSel" data-id="${Number(it.id||it.ID)}" data-cur="${String(it.stageId)}">
+        ${opts}
+      </select>
+    </div>`;
 }
 
 // ---------- Filters ----------
@@ -240,8 +256,7 @@ function rowCells(it) {
     tariff: tariff || '—',
     tEnd, mEnd,
     product: prod || '—',
-    act: id ? `<button class="btn" data-act="open-item" data-id="${id}">Открыть</button>
-               <button class="btn" data-act="unlink" data-id="${id}">Удалить</button>` : '',
+    act: id ? `<button class="btn" data-act="unlink" data-id="${id}">Удалить</button>` : '',
   };
 }
 
@@ -384,6 +399,29 @@ function bindActions() {
     localStorage.setItem('pageSize_v1', String(S.pageSize));
     S.page = 1;
     render();
+  });
+  
+ // смена стадии из таблицы
+  ui.rows.addEventListener('change', (e) => {
+    const sel = e.target.closest('.stageSel');
+    if (!sel) return;
+    const itemId = Number(sel.dataset.id);
+    const newStageId = sel.value;
+    const prev = sel.dataset.cur;
+    if (!itemId || !newStageId) return;
+
+    updateItemStage(SMART_ENTITY_TYPE_ID, itemId, newStageId).then(ok => {
+      if (!ok) {
+        alert('Не удалось сменить стадию');
+        sel.value = prev;
+        return;
+      }
+      // локально обновим и перерисуем
+      const it = S.items.find(x => Number(x.id||x.ID) === itemId);
+      if (it) it.stageId = newStageId;
+      sel.dataset.cur = newStageId;
+      render();
+    });
   });
 }
 
