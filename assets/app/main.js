@@ -123,10 +123,7 @@ async function buildStages(items) {
   }
   S.stagesByCat = dict;
 }
-const portal = normalizePortalUrl(UF(it, 'UF_CRM_10_1717328814784'));
-const urlCell = portal
-  ? `<a href="${portal}" target="_blank" rel="noopener">${portal.replace(/^https?:\/\//,'')}</a>`
-  : '—';
+
 function normalizePortalUrl(raw){
   let s = String(raw || '').trim();
   if (!s) return null;
@@ -239,10 +236,13 @@ function readColsFromHead() {
   const rest  = keys.filter(k => !front.includes(k));
   S.colsOrder = [...front, ...rest];
 
-  const saved = localStorage.getItem('colsVisible_v2');
-  S.colsVisible = saved ? new Set(JSON.parse(saved)) : new Set(S.colsOrder);
+  const saved = JSON.parse(localStorage.getItem('colsVisible_v2') || 'null');
+  S.colsVisible = saved ? new Set(saved) : new Set(S.colsOrder);
+  // проверка
+  const isColOn = (code) => S.colsVisible.has(code);
+
 }
-function isColOn(code){ return !!S.colsVisible[code]; }
+//function isColOn(code){ return !!S.colsVisible[code]; }
 function applyColsVisibility() {
   const on = S.colsVisible;
   $$('thead tr.head th[data-col], thead tr.filters th[data-col]').forEach(th => {
@@ -255,29 +255,31 @@ function applyColsVisibility() {
 function openColsModal() {
   if (!ui.colModal) return;
   const title = (c) => COL_TITLES[c] || c;
-  ui.colList.innerHTML = ALL_COLUMNS.map(code =>
-    `<label><input type="checkbox" data-col="${code}" ${S.colsVisible[code]?'checked':''}> ${title(code)}</label>`
+  ui.colList.innerHTML = S.colsOrder.map(k =>
+    `<label><input type="checkbox" value="${k}" ${S.colsVisible.has(k)?'checked':''}> ${COL_TITLES[k]||k}</label>`
   ).join('');
   ui.colModal.style.display = 'flex';
 
   ui.colApply.onclick = () => {
-    $$('input[type="checkbox"][data-col]', ui.colList)
-      .forEach(ch => S.colsVisible[ch.dataset.col] = ch.checked);
-    localStorage.setItem('colsVisible', JSON.stringify(S.colsVisible));
+    const next = [...ui.colList.querySelectorAll('input[type="checkbox"]')]
+      .filter(b => b.checked)
+      .map(b => b.value);
+    S.colsVisible = new Set(next);
+    localStorage.setItem('colsVisible_v2', JSON.stringify(next));
     ui.colModal.style.display = 'none';
-    render();                    // ← было renderTable()
+    render();
   };
   ui.colCancel.onclick = () => ui.colModal.style.display = 'none';
 }
 
-function applyColsFromModal() {
-  const boxes = Array.from(ui.colList.querySelectorAll('input[type="checkbox"]'));
-  const next = Object.fromEntries(boxes.map(b => [b.value, b.checked]));
-  S.colsVisible = next;
-  localStorage.setItem('colsVisible', JSON.stringify(S.colsVisible));
-  ui.colModal.style.display = 'none';
-  render();
-}
+//function applyColsFromModal() {
+//  const boxes = Array.from(ui.colList.querySelectorAll('input[type="checkbox"]'));
+//  const next = Object.fromEntries(boxes.map(b => [b.value, b.checked]));
+//  S.colsVisible = next;
+//  localStorage.setItem('colsVisible', JSON.stringify(S.colsVisible));
+//  ui.colModal.style.display = 'none';
+//  render();
+//}
 
 // ---------- Helpers ----------
 function normalizePortalUrl(raw){
@@ -302,6 +304,9 @@ function rowCells(it) {
   const dealId = UF(it, 'UF_CRM_10_1717328665682');
   const key    = UF(it, 'UF_CRM_10_1717328730625');
   const portal = normalizePortalUrl(UF(it, 'UF_CRM_10_1717328814784'));
+  const urlCell = portal
+    ? `<a href="${portal}" target="_blank" rel="noopener">${portal.replace(/^https?:\/\//,'')}</a>`
+    : '—';
   const tariff = enumText(window.__ENUM_DICT, 'UF_CRM_10_1717329015552', UF(it, 'UF_CRM_10_1717329015552'));
   const tEnd   = fmtDate(UF(it, 'UF_CRM_10_1717329087589'));
   const mEnd   = fmtDate(UF(it, 'UF_CRM_10_1717329109963'));
