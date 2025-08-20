@@ -12,7 +12,7 @@ import {
   smartItemPath,
   searchSmartItems,
 } from './api.js';
-import { SMART_ENTITY_TYPE_ID, DEAL_FIELD_CODE, ALL_COLUMNS, COL_TITLES } from './config.js';
+import { SMART_ENTITY_TYPE_ID, DEAL_FIELD_CODE } from './config.js';
 
 // ---------- UI ----------
 const ui = {
@@ -37,8 +37,11 @@ const S = {
   users: {},
   stagesByCat: {},
   filters: { title:'', ass:'', stage:'', deal:'', key:'', url:'', tariff:'' },
+
+  // порядок колонок (берём из DOM thead)
   colsOrder: [],
-  colsVisible: {},
+  // видимость колонок: Set<string>
+  colsVisible: new Set(),
 };
 window.__UF_KEYMAP = window.__UF_KEYMAP || {};
 window.__ENUM_DICT = window.__ENUM_DICT || {};
@@ -135,13 +138,13 @@ function passFilters(it) {
   const url   = String(UF(it, 'UF_CRM_10_1717328814784') ?? '').toLowerCase();
   const tariffText = String(enumText(window.__ENUM_DICT, 'UF_CRM_10_1717329015552', UF(it, 'UF_CRM_10_1717329015552')) ?? '').toLowerCase();
 
-  if (f.title  && !title.includes(f.title.toLowerCase())) return false;
-  if (f.ass    && !ass.includes(f.ass.toLowerCase())) return false;
-  if (f.stage  && !stage.includes(f.stage.toLowerCase())) return false;
-  if (f.deal   && !deal.includes(f.deal.toLowerCase())) return false;
-  if (f.key    && !key.includes(f.key.toLowerCase())) return false;
-  if (f.url    && !url.includes(f.url.toLowerCase())) return false;
-  if (f.tariff && !tariffText.includes(f.tariff.toLowerCase())) return false;
+  if (f.title  && !title.includes(f.title)) return false;
+  if (f.ass    && !ass.includes(f.ass)) return false;
+  if (f.stage  && !stage.includes(f.stage)) return false;
+  if (f.deal   && !deal.includes(f.deal)) return false;
+  if (f.key    && !key.includes(f.key)) return false;
+  if (f.url    && !url.includes(f.url)) return false;
+  if (f.tariff && !tariffText.includes(f.tariff)) return false;
   return true;
 }
 
@@ -156,17 +159,27 @@ function readColsFromHead() {
   const rest  = keys.filter(k => !front.includes(k));
   S.colsOrder = [...front, ...rest];
 
-  if (!S.colsVisible || !S.colsVisible.size) {
+  // загрузим видимость из localStorage, иначе — все включены
+  const saved = JSON.parse(localStorage.getItem('colsVisible_v2') || 'null');
+  if (Array.isArray(saved) && saved.length) {
+    S.colsVisible = new Set(saved.filter(k => S.colsOrder.includes(k)));
+  } else {
     S.colsVisible = new Set(S.colsOrder);
   }
 }
+function isColOn(key) {
+  return S.colsVisible instanceof Set ? S.colsVisible.has(key) : !!S.colsVisible[key];
+}
 function applyColsVisibility() {
-  const on = S.colsVisible;
   $$('thead tr.head th[data-col], thead tr.filters th[data-col]').forEach(th => {
-    th.style.display = on[th.dataset.col] ? '' : 'none';
+    const key = th.dataset.col;
+    th.style.display = isColOn(key) ? '' : 'none';
   });
   $$('tbody#rows tr').forEach(tr => {
-    $$('td[data-col]', tr).forEach(td => td.style.display = on[td.dataset.col] ? '' : 'none');
+    $$('td[data-col]', tr).forEach(td => {
+      const key = td.dataset.col;
+      td.style.display = isColOn(key) ? '' : 'none';
+    });
   });
 }
 function openColsModal() {
@@ -179,33 +192,27 @@ function openColsModal() {
     product:'Продукт', act:'Действия'
   };
 
-  // рендерим список чекбоксов в текущем порядке столбцов
   ui.colList.innerHTML = S.colsOrder.map(k => {
-    const checked = S.colsVisible.has(k) ? 'checked' : '';
+    const checked = isColOn(k) ? 'checked' : '';
     const label = LABELS[k] || k;
-    return `<label><input type="checkbox" value="${k}" ${checked}> ${label}</label>`;
+    return `<label style="display:flex;gap:8px;align-items:center;padding:6px 4px">
+      <input type="checkbox" value="${k}" ${checked}> ${label}
+    </label>`;
   }).join('');
 
   ui.colModal.style.display = 'flex';
 
   ui.colCancel.onclick = () => { ui.colModal.style.display = 'none'; };
-
-  ui.colApply.onclick = () => {
+  ui.colApply.onclick  = () => {
     const boxes = Array.from(ui.colList.querySelectorAll('input[type="checkbox"]'));
     const next = boxes.filter(b => b.checked).map(b => b.value);
     if (next.length) {
       S.colsVisible = new Set(next);
       localStorage.setItem('colsVisible_v2', JSON.stringify([...S.colsVisible]));
-      renderTable();
+      render();
     }
     ui.colModal.style.display = 'none';
   };
-}
-function applyColsFromModal() {
-  $$('input[type="checkbox"][data-col]', ui.colList).forEach(ch => S.colsVisible[ch.dataset.col] = ch.checked);
-  localStorage.setItem('colsVisible', JSON.stringify(S.colsVisible));
-  ui.colModal.style.display = 'none';
-  applyColsVisibility();
 }
 
 // ---------- Row render ----------
@@ -240,9 +247,13 @@ function rowCells(it) {
   };
 }
 function render() {
+  // безопасно, чтобы не было пустого экрана
+  if (!S.colsOrder.length) readColsFromHead();
+
   const list = S.items.filter(passFilters);
   if (!list.length) {
-    ui.rows.innerHTML = `<tr><td colspan="${S.colsOrder.length}" class="muted">Ничего не найдено</td></tr>`;
+    ui.rows.innerHTML = `<tr><td colspan="${Math.max(1, S.colsOrder.length)}" class="muted">Ничего не найдено</td></tr>`;
+    applyColsVisibility();
     return;
   }
   ui.rows.innerHTML = list.map(it => {
@@ -252,7 +263,7 @@ function render() {
   applyColsVisibility();
 }
 
-// ---------- Smart Picker (для 1032) ----------
+// ---------- Smart Picker ----------
 function ensureSmartPicker() {
   let modal = $('#spModal');
   if (modal) return modal;
@@ -298,12 +309,10 @@ async function loadSmartList(query = '') {
 }
 
 async function openSmartPicker() {
-  // делаем собственный модал
   const modal = ensureSmartPicker();
   modal.style.display = 'flex';
 
-  // первичный список — последние элементы
-  await load();            // чтобы были users/stages и т.д.
+  await load();            // актуализируем users/stages
   await loadSmartList('');
 
   $('#spSearch').onclick = () => loadSmartList(($('#spQuery').value || '').trim());
@@ -311,7 +320,6 @@ async function openSmartPicker() {
   $('#spApply').onclick = async () => {
     const ids = $$('.spCheck', modal).filter(x => x.checked).map(x => Number(x.value)).filter(Boolean);
     if (!ids.length) { modal.style.display = 'none'; return; }
-    // объединяем с текущими
     const merged = Array.from(new Set([...S.ids, ...ids]));
     const ok = await updateDealLinkedIds(S.dealId, DEAL_FIELD_CODE, merged);
     if (!ok) { alert('Не удалось обновить сделку'); return; }
@@ -322,7 +330,7 @@ async function openSmartPicker() {
 
 // ---------- Actions / Filters ----------
 function bindFilters() {
-  const bind = (el, key) => el && el.addEventListener('input', () => { S.filters[key] = el.value || ''; render(); });
+  const bind = (el, key) => el && el.addEventListener('input', () => { S.filters[key] = (el.value || '').toLowerCase(); render(); });
   bind(ui.fTitle,'title'); bind(ui.fAss,'ass'); bind(ui.fStage,'stage'); bind(ui.fDeal,'deal');
   bind(ui.fKey,'key'); bind(ui.fUrl,'url'); bind(ui.fTariff,'tariff');
 }
@@ -330,28 +338,8 @@ function bindActions() {
   ui.btnRefresh && ui.btnRefresh.addEventListener('click', load);
   ui.btnPick && ui.btnPick.addEventListener('click', openSmartPicker);
 
-  ui.btnCols && ui.btnCols.addEventListener('click', () => ui.colModal && (ui.colModal.style.display = 'flex'));
-  ui.colCancel && ui.colCancel.addEventListener('click', () => ui.colModal.style.display = 'none');
-  ui.colApply  && ui.colApply.addEventListener('click', applyColsFromModal);
-
-  ui.rows.addEventListener('click', (e) => {
-    const a = e.target.closest('[data-act]');
-    if (!a) return;
-    const act = a.dataset.act;
-    if (act === 'open-item') {
-      const id = Number(a.dataset.id); if (!id) return;
-      if (!openBxPath(smartItemPath(SMART_ENTITY_TYPE_ID, id))) alert(`Откройте элемент #${id} в CRM`);
-    }
-    if (act === 'open-user') {
-      const uid = Number(a.dataset.uid); if (!uid) return;
-      if (!openBxPath(`/company/personal/user/${uid}/`)) alert(`Профиль пользователя #${uid}`);
-    }
-    if (act === 'unlink') {
-      const id = Number(a.dataset.id); if (!id) return;
-      const left = S.ids.filter(x => Number(x) !== id);
-      updateDealLinkedIds(S.dealId, DEAL_FIELD_CODE, left).then(load);
-    }
-  });
+  // ВАЖНО: открываем МОДАЛ с наполнение чекбоксов
+  ui.btnCols && ui.btnCols.addEventListener('click', openColsModal);
 }
 
 // ---------- Load ----------
@@ -366,11 +354,11 @@ async function load() {
 
   const ids = await getLinkedItemIds(S.dealId, DEAL_FIELD_CODE, SMART_ENTITY_TYPE_ID);
   S.ids = ids;
-  if (!ids.length) { ui.rows.innerHTML = `<tr><td colspan="12" class="muted">В сделке нет связанных элементов</td></tr>`; return; }
+  if (!ids.length) { ui.rows.innerHTML = `<tr><td colspan="12" class="muted">В сделке нет связанных элементов</td></tr>`; applyColsVisibility(); return; }
 
   const select = buildSelect();
   S.items = await robustGetItemsByIds(SMART_ENTITY_TYPE_ID, ids, select);
-  if (!S.items.length) { ui.rows.innerHTML = `<tr><td colspan="12" class="muted">Не удалось загрузить элементы</td></tr>`; return; }
+  if (!S.items.length) { ui.rows.innerHTML = `<tr><td colspan="12" class="muted">Не удалось загрузить элементы</td></tr>`; applyColsVisibility(); return; }
 
   await buildUsers(S.items);
   await buildStages(S.items);
@@ -384,11 +372,12 @@ async function load() {
 }
 
 // ---------- Init ----------
-function init() { readColsFromHead(); bindFilters(); bindActions(); load(); }
+function init() {
+  readColsFromHead();
+  bindFilters();
+  bindActions();
+  load();
+}
 document.addEventListener('DOMContentLoaded', () => {
-  try {
-    init();   // ваша основная функция, где делается load(), bindToolbar(), applyColsModal(), render()
-  } catch (e) {
-    console.error('Init error', e);
-  }
+  try { init(); } catch (e) { console.error('Init error', e); }
 });
