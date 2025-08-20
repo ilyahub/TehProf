@@ -14,6 +14,7 @@ import {
   searchSmartItems,
 } from './api.js';
 import { SMART_ENTITY_TYPE_ID, DEAL_FIELD_CODE, ALL_COLUMNS, COL_TITLES } from './config.js';
+import { waitBX24 } from './sdk.js';
 
 // ---------- UI ----------
 const ui = {
@@ -180,33 +181,47 @@ function readColsFromHead() {
   const rest  = keys.filter(k => !front.includes(k));
   S.colsOrder = [...front, ...rest];
 
-  // загрузим/инициализируем видимость
-  const saved = JSON.parse(localStorage.getItem('colsVisible') || 'null');
-  if (saved && typeof saved === 'object') S.colsVisible = saved;
-  for (const c of S.colsOrder) if (!(c in S.colsVisible)) S.colsVisible[c] = true;
+  const saved = localStorage.getItem('colsVisible_v2');
+  S.colsVisible = saved ? new Set(JSON.parse(saved)) : new Set(S.colsOrder);
 }
 function isColOn(code){ return !!S.colsVisible[code]; }
 function applyColsVisibility() {
+  const on = S.colsVisible;
   $$('thead tr.head th[data-col], thead tr.filters th[data-col]').forEach(th => {
-    th.style.display = isColOn(th.dataset.col) ? '' : 'none';
+    th.style.display = on.has(th.dataset.col) ? '' : 'none';
   });
   $$('tbody#rows tr').forEach(tr => {
-    $$('td[data-col]', tr).forEach(td => {
-      td.style.display = isColOn(td.dataset.col) ? '' : 'none';
-    });
+    $$('td[data-col]', tr).forEach(td => td.style.display = on.has(td.dataset.col) ? '' : 'none');
   });
 }
 function openColsModal() {
   if (!S.colsOrder.length) readColsFromHead();
-  ui.colList.innerHTML = S.colsOrder.map(k => {
-    const label = COL_TITLES[k] || k;
-    const checked = isColOn(k) ? 'checked' : '';
-    return `<label style="display:flex;gap:8px;align-items:center;padding:6px 4px">
-      <input type="checkbox" value="${k}" ${checked}> ${label}
-    </label>`;
-  }).join('');
+
+  const LABELS = {
+    id:'ID', title:'Название', ass:'Ответственный', stage:'Стадия',
+    deal:'ID исходной сделки', key:'Лицензионный ключ', url:'Адрес портала',
+    tariff:'Текущий тариф', tEnd:'Окончание тарифа', mEnd:'Окончание подписки',
+    product:'Продукт', act:'Действия'
+  };
+
+  ui.colList.innerHTML = S.colsOrder.map(k =>
+    `<label><input type="checkbox" value="${k}" ${S.colsVisible.has(k)?'checked':''}> ${LABELS[k]||k}</label>`
+  ).join('');
   ui.colModal.style.display = 'flex';
+
+  ui.colCancel.onclick = () => { ui.colModal.style.display = 'none'; };
+  ui.colApply.onclick = () => {
+    const boxes = [...ui.colList.querySelectorAll('input[type="checkbox"]')];
+    const next = boxes.filter(b => b.checked).map(b => b.value);
+    if (next.length) {
+      S.colsVisible = new Set(next);
+      localStorage.setItem('colsVisible_v2', JSON.stringify(next));
+      render();                // <- здесь должна вызываться локальная render(), не renderTable()
+    }
+    ui.colModal.style.display = 'none';
+  };
 }
+
 function applyColsFromModal() {
   const boxes = Array.from(ui.colList.querySelectorAll('input[type="checkbox"]'));
   const next = Object.fromEntries(boxes.map(b => [b.value, b.checked]));
@@ -256,7 +271,7 @@ function rowCells(it) {
     tariff: tariff || '—',
     tEnd, mEnd,
     product: prod || '—',
-    act: id ? `<button class="btn" data-act="unlink" data-id="${id}">Удалить</button>` : '',
+    act: id ? `<button class="btn btn-xs" data-act="unlink" data-id="${id}">Удалить</button>` : '',
   };
 }
 
@@ -427,35 +442,54 @@ function bindActions() {
 
 // ---------- Load ----------
 async function load() {
-  ui.rows.innerHTML = `<tr><td colspan="12" class="muted">Загрузка…</td></tr>`;
-  S.dealId = resolveDealId();
-  if (!S.dealId) { ui.rows.innerHTML = `<tr><td colspan="12" class="muted">Нет ID сделки</td></tr>`; return; }
+  try {
+    ui.rows.innerHTML = `<tr><td colspan="12" class="muted">Загрузка…</td></tr>`;
+    S.dealId = resolveDealId();
+    if (!S.dealId) { ui.rows.innerHTML = `<tr><td colspan="12" class="muted">Нет ID сделки</td></tr>`; return; }
 
-  const meta = await fetchFieldMeta(SMART_ENTITY_TYPE_ID);
-  window.__UF_KEYMAP = meta.keymap || {};
-  window.__ENUM_DICT = meta.enums  || {};
+    const meta = await fetchFieldMeta(SMART_ENTITY_TYPE_ID);
+    window.__UF_KEYMAP = meta.keymap || {};
+    window.__ENUM_DICT = meta.enums  || {};
 
-  const ids = await getLinkedItemIds(S.dealId, DEAL_FIELD_CODE, SMART_ENTITY_TYPE_ID);
-  S.ids = ids;
-  if (!ids.length) { ui.rows.innerHTML = `<tr><td colspan="12" class="muted">В сделке нет связанных элементов</td></tr>`; return; }
+    const ids = await getLinkedItemIds(S.dealId, DEAL_FIELD_CODE, SMART_ENTITY_TYPE_ID);
+    S.ids = ids;
+    if (!ids.length) { ui.rows.innerHTML = `<tr><td colspan="12" class="muted">В сделке нет связанных элементов</td></tr>`; return; }
 
-  const select = buildSelect();
-  S.items = await robustGetItemsByIds(SMART_ENTITY_TYPE_ID, ids, select);
-  if (!S.items.length) { ui.rows.innerHTML = `<tr><td colspan="12" class="muted">Не удалось загрузить элементы</td></tr>`; return; }
+    const select = buildSelect();
+    S.items = await robustGetItemsByIds(SMART_ENTITY_TYPE_ID, ids, select);
+    if (!S.items.length) { ui.rows.innerHTML = `<tr><td colspan="12" class="muted">Не удалось загрузить элементы</td></tr>`; return; }
 
-  await buildUsers(S.items);
-  await buildStages(S.items);
+    await buildUsers(S.items);
+    await buildStages(S.items);
 
-  if (!S.colsOrder.length) readColsFromHead();
-  render();
+    if (!S.colsOrder.length) readColsFromHead();
+    render();
 
-  if (window.BX24?.resizeWindow) {
-    setTimeout(() => BX24.resizeWindow(document.documentElement.scrollWidth, document.documentElement.scrollHeight), 150);
+    if (window.BX24?.resizeWindow) {
+      setTimeout(() => BX24.resizeWindow(document.documentElement.scrollWidth, document.documentElement.scrollHeight), 150);
+    }
+  } catch (e) {
+    console.error('Load error', e);
+    ui.rows.innerHTML = `<tr><td colspan="12" class="muted">Ошибка загрузки</td></tr>`;
   }
 }
 
 // ---------- Init ----------
-function init() { readColsFromHead(); bindFilters(); bindActions(); load(); }
+async function init() {
+  readColsFromHead();
+  bindFilters();
+  bindActions();
+  await waitBX24();      // <-- ключевой момент
+  await load();
+}
+
 document.addEventListener('DOMContentLoaded', () => {
-  try { init(); } catch (e) { console.error('Init error', e); }
+  init().catch(e => {
+    console.error('Init error', e);
+    ui.rows.innerHTML = `<tr><td colspan="12" class="muted">Ошибка инициализации</td></tr>`;
+  });
 });
+//function init() { readColsFromHead(); bindFilters(); bindActions(); load(); }
+//document.addEventListener('DOMContentLoaded', () => {
+//  try { init(); } catch (e) { console.error('Init error', e); }
+//});
