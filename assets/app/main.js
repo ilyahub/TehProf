@@ -12,7 +12,7 @@ import {
   smartItemPath,
   searchSmartItems,
 } from './api.js';
-import { SMART_ENTITY_TYPE_ID, DEAL_FIELD_CODE } from './config.js';
+import { SMART_ENTITY_TYPE_ID, DEAL_FIELD_CODE, ALL_COLUMNS, COL_TITLES } from './config.js';
 
 // ---------- UI ----------
 const ui = {
@@ -165,9 +165,9 @@ function applyColsVisibility() {
 }
 function openColsModal() {
   if (!ui.colModal) return;
-  ui.colList.innerHTML = S.colsOrder.map(code => {
-    const map = {id:'ID', title:'Название', ass:'Ответственный', stage:'Стадия', deal:'ID сделки', key:'Ключ', url:'Портал', tariff:'Тариф', tEnd:'Окончание тарифа', mEnd:'Окончание подписки', product:'Продукт', act:'Действия'};
-    return `<label><input type="checkbox" data-col="${code}" ${S.colsVisible[code]?'checked':''}> ${map[code]||code}</label>`;
+  const title = (c) => COL_TITLES[c] || c;
+  ui.colList.innerHTML = ALL_COLUMNS.map(code => {
+    return `<label><input type="checkbox" data-col="${code}" ${S.colsVisible[code]?'checked':''}> ${title(code)}</label>`;
   }).join('');
   ui.colModal.style.display = 'flex';
 }
@@ -194,7 +194,7 @@ function rowCells(it) {
   const urlCell = url ? `<a href="${String(url)}" target="_blank" rel="noopener">${String(url)}</a>` : '—';
 
   return {
-    id: id ? `<a href="#" data-act="open-item" data-id="${id}">${id}</a>` : '—',
+    id: id ? String(id) : '—',
     title: id ? `<a href="#" data-act="open-item" data-id="${id}">${String(it.title || '—')}</a>` : (String(it.title || '—')),
     ass: uid ? `<a href="#" data-act="open-user" data-uid="${uid}">${shortUser(user)}</a>` : shortUser(user),
 
@@ -318,7 +318,6 @@ function bindActions() {
     }
     if (act === 'unlink') {
       const id = Number(a.dataset.id); if (!id) return;
-      if (!confirm('Убрать элемент из сделки?')) return;
       const left = S.ids.filter(x => Number(x) !== id);
       updateDealLinkedIds(S.dealId, DEAL_FIELD_CODE, left).then(load);
     }
