@@ -1,5 +1,4 @@
 // Рендер и привязка UI
-import { $, $$, fmtDate, UF, enumText, parseStage } from './utils.js';
 import { COL_LABEL } from './config.js';
 
 export function fitToIframe() {
