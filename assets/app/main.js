@@ -12,7 +12,7 @@ import {
   smartItemPath,
   searchSmartItems,
 } from './api.js';
-import { SMART_ENTITY_TYPE_ID, DEAL_FIELD_CODE } from './config.js';
+import { SMART_ENTITY_TYPE_ID, DEAL_FIELD_CODE, ALL_COLUMNS, COL_TITLES } from './config.js';
 
 // ---------- UI ----------
 const ui = {
@@ -24,6 +24,10 @@ const ui = {
   colList: $('#colList'),
   colApply: $('#colApply'),
   colCancel: $('#colCancel'),
+  pgPrev: $('#pgPrev'),
+  pgNext: $('#pgNext'),
+  pgInfo: $('#pgInfo'),
+  pageSize: $('#pageSize'),
 
   fTitle: $('#fTitle'), fAss: $('#fAss'), fStage: $('#fStage'), fDeal: $('#fDeal'),
   fKey: $('#fKey'), fUrl: $('#fUrl'), fTariff: $('#fTariff'),
@@ -38,11 +42,16 @@ const S = {
   stagesByCat: {},
   filters: { title:'', ass:'', stage:'', deal:'', key:'', url:'', tariff:'' },
 
-  // порядок колонок (берём из DOM thead)
+  // колонки
   colsOrder: [],
-  // видимость колонок: Set<string>
-  colsVisible: new Set(),
+  colsVisible: {},
+
+  // пагинация
+  page: 1,
+  pageSize: Number(localStorage.getItem('pageSize_v1')) || Number(ui.pageSize?.value) || 10,
 };
+if (ui.pageSize) ui.pageSize.value = String(S.pageSize);
+
 window.__UF_KEYMAP = window.__UF_KEYMAP || {};
 window.__ENUM_DICT = window.__ENUM_DICT || {};
 
@@ -112,18 +121,15 @@ async function buildStages(items) {
   }
   S.stagesByCat = dict;
 }
-
 function stageSegbar(it) {
   const { categoryId, statusId } = parseStage(it.stageId);
   const pack = S.stagesByCat[Number(categoryId)] || { order: [], byId: {} };
   const idx  = Math.max(0, pack.order.indexOf(statusId));
-
   const segs = pack.order.map((sid,i) => {
     const st = pack.byId[sid] || {};
     const cls = i < idx ? 'done' : (i === idx ? 'now' : '');
     return `<i class="${cls}" style="background:${st.COLOR||'#a5b4fc'}" data-tip="${st.NAME||sid}"></i>`;
   }).join('');
-
   return `<div class="segbar">${segs || ''}</div>`;
 }
 
@@ -154,65 +160,59 @@ function readColsFromHead() {
     .map(th => th.getAttribute('data-col'))
     .filter(Boolean);
 
-  // двигаем ID, Title, Responsible в начало
   const front = ['id', 'title', 'ass'];
   const rest  = keys.filter(k => !front.includes(k));
   S.colsOrder = [...front, ...rest];
 
-  // загрузим видимость из localStorage, иначе — все включены
-  const saved = JSON.parse(localStorage.getItem('colsVisible_v2') || 'null');
-  if (Array.isArray(saved) && saved.length) {
-    S.colsVisible = new Set(saved.filter(k => S.colsOrder.includes(k)));
-  } else {
-    S.colsVisible = new Set(S.colsOrder);
-  }
+  // загрузим/инициализируем видимость
+  const saved = JSON.parse(localStorage.getItem('colsVisible') || 'null');
+  if (saved && typeof saved === 'object') S.colsVisible = saved;
+  for (const c of S.colsOrder) if (!(c in S.colsVisible)) S.colsVisible[c] = true;
 }
-function isColOn(key) {
-  return S.colsVisible instanceof Set ? S.colsVisible.has(key) : !!S.colsVisible[key];
-}
+function isColOn(code){ return !!S.colsVisible[code]; }
 function applyColsVisibility() {
   $$('thead tr.head th[data-col], thead tr.filters th[data-col]').forEach(th => {
-    const key = th.dataset.col;
-    th.style.display = isColOn(key) ? '' : 'none';
+    th.style.display = isColOn(th.dataset.col) ? '' : 'none';
   });
   $$('tbody#rows tr').forEach(tr => {
     $$('td[data-col]', tr).forEach(td => {
-      const key = td.dataset.col;
-      td.style.display = isColOn(key) ? '' : 'none';
+      td.style.display = isColOn(td.dataset.col) ? '' : 'none';
     });
   });
 }
 function openColsModal() {
   if (!S.colsOrder.length) readColsFromHead();
-
-  const LABELS = {
-    id:'ID', title:'Название', ass:'Ответственный', stage:'Стадия',
-    deal:'ID исходной сделки', key:'Лицензионный ключ', url:'Адрес портала',
-    tariff:'Текущий тариф', tEnd:'Окончание тарифа', mEnd:'Окончание подписки',
-    product:'Продукт', act:'Действия'
-  };
-
   ui.colList.innerHTML = S.colsOrder.map(k => {
+    const label = COL_TITLES[k] || k;
     const checked = isColOn(k) ? 'checked' : '';
-    const label = LABELS[k] || k;
     return `<label style="display:flex;gap:8px;align-items:center;padding:6px 4px">
       <input type="checkbox" value="${k}" ${checked}> ${label}
     </label>`;
   }).join('');
-
   ui.colModal.style.display = 'flex';
+}
+function applyColsFromModal() {
+  const boxes = Array.from(ui.colList.querySelectorAll('input[type="checkbox"]'));
+  const next = Object.fromEntries(boxes.map(b => [b.value, b.checked]));
+  S.colsVisible = next;
+  localStorage.setItem('colsVisible', JSON.stringify(S.colsVisible));
+  ui.colModal.style.display = 'none';
+  render();
+}
 
-  ui.colCancel.onclick = () => { ui.colModal.style.display = 'none'; };
-  ui.colApply.onclick  = () => {
-    const boxes = Array.from(ui.colList.querySelectorAll('input[type="checkbox"]'));
-    const next = boxes.filter(b => b.checked).map(b => b.value);
-    if (next.length) {
-      S.colsVisible = new Set(next);
-      localStorage.setItem('colsVisible_v2', JSON.stringify([...S.colsVisible]));
-      render();
-    }
-    ui.colModal.style.display = 'none';
-  };
+// ---------- Helpers ----------
+function normalizePortalUrl(raw){
+  let s = String(raw || '').trim();
+  if (!s) return null;
+  // если пришёл без схемы — добавим https://
+  if (!/^https?:\/\//i.test(s)) s = 'https://' + s.replace(/^\/+/, '');
+  // уберём лишние пробелы и двойные слеши
+  try {
+    const u = new URL(s);
+    return u.href;
+  } catch {
+    return s; // пусть будет как есть
+  }
 }
 
 // ---------- Row render ----------
@@ -222,13 +222,11 @@ function rowCells(it) {
   const user = S.users[uid];
   const dealId = UF(it, 'UF_CRM_10_1717328665682');
   const key    = UF(it, 'UF_CRM_10_1717328730625');
-  const url    = UF(it, 'UF_CRM_10_1717328814784');
+  const portal = normalizePortalUrl(UF(it, 'UF_CRM_10_1717328814784'));
   const tariff = enumText(window.__ENUM_DICT, 'UF_CRM_10_1717329015552', UF(it, 'UF_CRM_10_1717329015552'));
   const tEnd   = fmtDate(UF(it, 'UF_CRM_10_1717329087589'));
   const mEnd   = fmtDate(UF(it, 'UF_CRM_10_1717329109963'));
   const prod   = enumText(window.__ENUM_DICT, 'UF_CRM_10_1717329453779', UF(it, 'UF_CRM_10_1717329453779'));
-
-  const urlCell = url ? `<a href="${String(url)}" target="_blank" rel="noopener">${String(url)}</a>` : '—';
 
   return {
     id: id ? String(id) : '—',
@@ -238,28 +236,41 @@ function rowCells(it) {
     stage: stageSegbar(it),
     deal: dealId ?? '—',
     key: key ? String(key) : '—',
-    url: urlCell,
+    url: portal ? `<a href="${portal}" target="_blank" rel="noopener">${portal.replace(/^https?:\/\//,'')}</a>` : '—',
     tariff: tariff || '—',
     tEnd, mEnd,
     product: prod || '—',
-    act: id ? `<button class="btn btn-xs" data-act="open-item" data-id="${id}">Открыть</button>
-               <button class="btn btn-xs" data-act="unlink" data-id="${id}">Удалить</button>` : '',
+    act: id ? `<button class="btn" data-act="open-item" data-id="${id}">Открыть</button>
+               <button class="btn" data-act="unlink" data-id="${id}">Удалить</button>` : '',
   };
 }
-function render() {
-  // безопасно, чтобы не было пустого экрана
-  if (!S.colsOrder.length) readColsFromHead();
 
-  const list = S.items.filter(passFilters);
-  if (!list.length) {
-    ui.rows.innerHTML = `<tr><td colspan="${Math.max(1, S.colsOrder.length)}" class="muted">Ничего не найдено</td></tr>`;
+function render() {
+  const filtered = S.items.filter(passFilters);
+
+  // --- пагинация ---
+  const total = filtered.length;
+  const pages = Math.max(1, Math.ceil(total / S.pageSize));
+  if (S.page > pages) S.page = pages;
+  const start = (S.page - 1) * S.pageSize;
+  const slice = filtered.slice(start, start + S.pageSize);
+
+  // шапка пагинации
+  if (ui.pgInfo) ui.pgInfo.textContent = `${S.page}/${pages}`;
+  if (ui.pgPrev) ui.pgPrev.disabled = (S.page <= 1);
+  if (ui.pgNext) ui.pgNext.disabled = (S.page >= pages);
+
+  if (!slice.length) {
+    ui.rows.innerHTML = `<tr><td colspan="${S.colsOrder.length || 12}" class="muted">Ничего не найдено</td></tr>`;
     applyColsVisibility();
     return;
   }
-  ui.rows.innerHTML = list.map(it => {
+
+  ui.rows.innerHTML = slice.map(it => {
     const cells = rowCells(it);
     return `<tr>${S.colsOrder.map(code => `<td data-col="${code}">${cells[code] ?? ''}</td>`).join('')}</tr>`;
   }).join('');
+
   applyColsVisibility();
 }
 
@@ -267,7 +278,6 @@ function render() {
 function ensureSmartPicker() {
   let modal = $('#spModal');
   if (modal) return modal;
-
   const html = `
   <div class="modal" id="spModal" style="display:none;z-index:10000">
     <div class="card" style="width:min(720px,95vw)">
@@ -289,7 +299,6 @@ function ensureSmartPicker() {
   modal = $('#spModal');
   return modal;
 }
-
 async function loadSmartList(query = '') {
   const box = $('#spList');
   box.innerHTML = 'Загрузка…';
@@ -307,14 +316,11 @@ async function loadSmartList(query = '') {
     </label>`;
   }).join('');
 }
-
 async function openSmartPicker() {
   const modal = ensureSmartPicker();
   modal.style.display = 'flex';
-
   await load();            // актуализируем users/stages
   await loadSmartList('');
-
   $('#spSearch').onclick = () => loadSmartList(($('#spQuery').value || '').trim());
   $('#spCancel').onclick = () => modal.style.display = 'none';
   $('#spApply').onclick = async () => {
@@ -330,7 +336,11 @@ async function openSmartPicker() {
 
 // ---------- Actions / Filters ----------
 function bindFilters() {
-  const bind = (el, key) => el && el.addEventListener('input', () => { S.filters[key] = (el.value || '').toLowerCase(); render(); });
+  const bind = (el, key) => el && el.addEventListener('input', () => {
+    S.filters[key] = String(el.value || '').toLowerCase();
+    S.page = 1;
+    render();
+  });
   bind(ui.fTitle,'title'); bind(ui.fAss,'ass'); bind(ui.fStage,'stage'); bind(ui.fDeal,'deal');
   bind(ui.fKey,'key'); bind(ui.fUrl,'url'); bind(ui.fTariff,'tariff');
 }
@@ -338,8 +348,43 @@ function bindActions() {
   ui.btnRefresh && ui.btnRefresh.addEventListener('click', load);
   ui.btnPick && ui.btnPick.addEventListener('click', openSmartPicker);
 
-  // ВАЖНО: открываем МОДАЛ с наполнение чекбоксов
+  // колонки
   ui.btnCols && ui.btnCols.addEventListener('click', openColsModal);
+  ui.colCancel && ui.colCancel.addEventListener('click', () => ui.colModal.style.display = 'none');
+  ui.colApply  && ui.colApply.addEventListener('click', applyColsFromModal);
+
+  // делегированные клики по таблице
+  ui.rows.addEventListener('click', (e) => {
+    const a = e.target.closest('[data-act]');
+    if (!a) return;
+    e.preventDefault(); // чтобы # и кнопки не вели себя по умолчанию
+    const act = a.dataset.act;
+    if (act === 'open-item') {
+      const id = Number(a.dataset.id); if (!id) return;
+      if (!openBxPath(smartItemPath(SMART_ENTITY_TYPE_ID, id))) alert(`Откройте элемент #${id} в CRM`);
+    } else if (act === 'open-user') {
+      const uid = Number(a.dataset.uid); if (!uid) return;
+      if (!openBxPath(`/company/personal/user/${uid}/`)) alert(`Профиль пользователя #${uid}`);
+    } else if (act === 'unlink') {
+      const id = Number(a.dataset.id); if (!id) return;
+      const left = S.ids.filter(x => Number(x) !== id);
+      updateDealLinkedIds(S.dealId, DEAL_FIELD_CODE, left).then(load);
+    }
+  });
+
+  // пагинация
+  ui.pgPrev && ui.pgPrev.addEventListener('click', () => { if (S.page > 1) { S.page--; render(); } });
+  ui.pgNext && ui.pgNext.addEventListener('click', () => {
+    const total = S.items.filter(passFilters).length;
+    const pages = Math.max(1, Math.ceil(total / S.pageSize));
+    if (S.page < pages) { S.page++; render(); }
+  });
+  ui.pageSize && ui.pageSize.addEventListener('change', (e) => {
+    S.pageSize = Number(e.target.value) || 10;
+    localStorage.setItem('pageSize_v1', String(S.pageSize));
+    S.page = 1;
+    render();
+  });
 }
 
 // ---------- Load ----------
@@ -354,11 +399,11 @@ async function load() {
 
   const ids = await getLinkedItemIds(S.dealId, DEAL_FIELD_CODE, SMART_ENTITY_TYPE_ID);
   S.ids = ids;
-  if (!ids.length) { ui.rows.innerHTML = `<tr><td colspan="12" class="muted">В сделке нет связанных элементов</td></tr>`; applyColsVisibility(); return; }
+  if (!ids.length) { ui.rows.innerHTML = `<tr><td colspan="12" class="muted">В сделке нет связанных элементов</td></tr>`; return; }
 
   const select = buildSelect();
   S.items = await robustGetItemsByIds(SMART_ENTITY_TYPE_ID, ids, select);
-  if (!S.items.length) { ui.rows.innerHTML = `<tr><td colspan="12" class="muted">Не удалось загрузить элементы</td></tr>`; applyColsVisibility(); return; }
+  if (!S.items.length) { ui.rows.innerHTML = `<tr><td colspan="12" class="muted">Не удалось загрузить элементы</td></tr>`; return; }
 
   await buildUsers(S.items);
   await buildStages(S.items);
@@ -372,12 +417,7 @@ async function load() {
 }
 
 // ---------- Init ----------
-function init() {
-  readColsFromHead();
-  bindFilters();
-  bindActions();
-  load();
-}
+function init() { readColsFromHead(); bindFilters(); bindActions(); load(); }
 document.addEventListener('DOMContentLoaded', () => {
   try { init(); } catch (e) { console.error('Init error', e); }
 });
