@@ -147,12 +147,18 @@ function passFilters(it) {
 
 // ---------- Columns ----------
 function readColsFromHead() {
-  S.colsOrder = [...document.querySelectorAll('thead tr.head th[data-col]')].map(th => th.dataset.col);
-  const saved = localStorage.getItem('colsVisible');
-  if (saved) {
-    try { S.colsVisible = JSON.parse(saved) || {}; } catch {}
+  const keys = Array.from(document.querySelectorAll('tr.head th[data-col]'))
+    .map(th => th.getAttribute('data-col'))
+    .filter(Boolean);
+
+  // двигаем ID, Title, Responsible в начало
+  const front = ['id', 'title', 'ass'];
+  const rest  = keys.filter(k => !front.includes(k));
+  S.colsOrder = [...front, ...rest];
+
+  if (!S.colsVisible || !S.colsVisible.size) {
+    S.colsVisible = new Set(S.colsOrder);
   }
-  for (const c of S.colsOrder) if (!(c in S.colsVisible)) S.colsVisible[c] = true;
 }
 function applyColsVisibility() {
   const on = S.colsVisible;
@@ -164,12 +170,36 @@ function applyColsVisibility() {
   });
 }
 function openColsModal() {
-  if (!ui.colModal) return;
-  const title = (c) => COL_TITLES[c] || c;
-  ui.colList.innerHTML = ALL_COLUMNS.map(code => {
-    return `<label><input type="checkbox" data-col="${code}" ${S.colsVisible[code]?'checked':''}> ${title(code)}</label>`;
+  if (!S.colsOrder.length) readColsFromHead();
+
+  const LABELS = {
+    id:'ID', title:'Название', ass:'Ответственный', stage:'Стадия',
+    deal:'ID исходной сделки', key:'Лицензионный ключ', url:'Адрес портала',
+    tariff:'Текущий тариф', tEnd:'Окончание тарифа', mEnd:'Окончание подписки',
+    product:'Продукт', act:'Действия'
+  };
+
+  // рендерим список чекбоксов в текущем порядке столбцов
+  ui.colList.innerHTML = S.colsOrder.map(k => {
+    const checked = S.colsVisible.has(k) ? 'checked' : '';
+    const label = LABELS[k] || k;
+    return `<label><input type="checkbox" value="${k}" ${checked}> ${label}</label>`;
   }).join('');
+
   ui.colModal.style.display = 'flex';
+
+  ui.colCancel.onclick = () => { ui.colModal.style.display = 'none'; };
+
+  ui.colApply.onclick = () => {
+    const boxes = Array.from(ui.colList.querySelectorAll('input[type="checkbox"]'));
+    const next = boxes.filter(b => b.checked).map(b => b.value);
+    if (next.length) {
+      S.colsVisible = new Set(next);
+      localStorage.setItem('colsVisible_v2', JSON.stringify([...S.colsVisible]));
+      renderTable();
+    }
+    ui.colModal.style.display = 'none';
+  };
 }
 function applyColsFromModal() {
   $$('input[type="checkbox"][data-col]', ui.colList).forEach(ch => S.colsVisible[ch.dataset.col] = ch.checked);
