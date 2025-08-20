@@ -385,4 +385,10 @@ async function load() {
 
 // ---------- Init ----------
 function init() { readColsFromHead(); bindFilters(); bindActions(); load(); }
-document.addEventListener('DOMContentLoaded', init);
+document.addEventListener('DOMContentLoaded', () => {
+  try {
+    init();   // ваша основная функция, где делается load(), bindToolbar(), applyColsModal(), render()
+  } catch (e) {
+    console.error('Init error', e);
+  }
+});
