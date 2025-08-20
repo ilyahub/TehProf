@@ -76,16 +76,17 @@ export async function onRequest({ request, env }) {
   .bar{position:relative;flex:0 0 160px;height:10px;border-radius:999px;background:#edeef3;overflow:hidden}
   .bar>i{position:absolute;left:0;top:0;bottom:0;background:#a5b4fc }
   .stageSel{padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:#fff;margin-left:10px}
-  .segbar{display:flex;gap:2px;align-items:center;height:12px;border-radius:999px;background:#edeef3;padding:2px}
-  .segbar i{flex:1;border-radius:6px;opacity:.25;position:relative}
-  .segbar i.now{opacity:.9;outline:2px solid #0000001a}
-  .segbar i.done{opacity:1}
-  .segbar i:hover::after{
-    content:attr(data-tip);
-    position:absolute;left:50%;top:-30px;transform:translateX(-50%);
-    background:#111827;color:#fff;border-radius:6px;padding:4px 8px;font-size:12px;white-space:nowrap;
-    box-shadow:0 6px 18px rgba(0,0,0,.12);
+  .segbar{display:flex; gap:2px; align-items:center}
+  .segbar i{display:block; height:10px; flex:1 1 0; border-radius:999px; opacity:.35; position:relative}
+  .segbar i.now{opacity:1}
+  .segbar i.done{opacity:.7}
+  .segbar i::after{
+    content: attr(data-tip);
+    position:absolute; left:50%; top:-28px; transform:translateX(-50%);
+    background:#111827; color:#fff; font-size:12px; padding:4px 6px; border-radius:6px;
+    white-space:nowrap; opacity:0; pointer-events:none; transition:.12s;
   }
+  .segbar i:hover::after{opacity:1}
   .modal{position:fixed;inset:0;background:rgba(17,24,39,.5);display:none;align-items:center;justify-content:center;z-index:9999}
   .card{width:min(640px,95vw);max-height:85vh;background:#fff;border-radius:16px;border:1px solid var(--line);display:flex;flex-direction:column}
   .card-h{padding:14px 16px;border-bottom:1px solid var(--line);font-weight:700}
@@ -141,7 +142,7 @@ export async function onRequest({ request, env }) {
           <th data-col="ass"><input class="filter" id="fAss" placeholder="Фильтр по ответственному"></th>
           <th data-col="stage"><input class="filter" id="fStage" placeholder="Фильтр по стадии"></th>
           <th data-col="deal"><input class="filter" id="fDeal" placeholder="ID сделки"></th>
-          <th data-col="key">
+          <th data-col="key"><input class="filter" id="fKey" placeholder="Ключ"></th>
           <th data-col="url"><input class="filter" id="fUrl" placeholder="Портал"></th>
           <th data-col="tariff"><input class="filter" id="fTariff" placeholder="Тариф"></th>
           <th data-col="tEnd"></th>
