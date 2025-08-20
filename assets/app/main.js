@@ -124,12 +124,12 @@ async function buildStages(items) {
   S.stagesByCat = dict;
 }
 
-function normalizePortalUrl(raw){
-  let s = String(raw || '').trim();
-  if (!s) return null;
-  if (!/^https?:\/\//i.test(s)) s = 'https://' + s.replace(/^\/+/, '');
-  try { return new URL(s).href; } catch { return s; }
-}
+//function normalizePortalUrl(raw){
+//  let s = String(raw || '').trim();
+//  if (!s) return null;
+//  if (!/^https?:\/\//i.test(s)) s = 'https://' + s.replace(/^\/+/, '');
+//  try { return new URL(s).href; } catch { return s; }
+//}
 
 function stageSegbar(it) {
   const { typeId, categoryId, statusId } = parseStage(it.stageId);
@@ -434,7 +434,7 @@ function bindActions() {
   // колонки
   ui.btnCols && ui.btnCols.addEventListener('click', openColsModal);
   ui.colCancel && ui.colCancel.addEventListener('click', () => ui.colModal.style.display = 'none');
-  ui.colApply  && ui.colApply.addEventListener('click', applyColsFromModal);
+ // ui.colApply  && ui.colApply.addEventListener('click', applyColsFromModal);
 
   // делегированные клики по таблице
   ui.rows.addEventListener('click', (e) => {
