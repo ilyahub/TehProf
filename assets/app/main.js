@@ -123,6 +123,17 @@ async function buildStages(items) {
   }
   S.stagesByCat = dict;
 }
+const portal = normalizePortalUrl(UF(it, 'UF_CRM_10_1717328814784'));
+const urlCell = portal
+  ? `<a href="${portal}" target="_blank" rel="noopener">${portal.replace(/^https?:\/\//,'')}</a>`
+  : '—';
+function normalizePortalUrl(raw){
+  let s = String(raw || '').trim();
+  if (!s) return null;
+  if (!/^https?:\/\//i.test(s)) s = 'https://' + s.replace(/^\/+/, '');
+  try { return new URL(s).href; } catch { return s; }
+}
+
 function stageSegbar(it) {
   const { typeId, categoryId, statusId } = parseStage(it.stageId);
   const pack = S.stagesByCat[Number(categoryId)] || { order: [], byId: {} };
@@ -134,8 +145,7 @@ function stageSegbar(it) {
     return `<i class="${cls}" style="background:${st.COLOR||'#a5b4fc'}" data-tip="${st.NAME||sid}"></i>`;
   }).join('');
 
-  // префикс полного stageId для SPA: DT{TYPE}_{CATEGORY}:
-  const prefix = `DT${typeId || ${SMART_ENTITY_TYPE_ID}}_${categoryId}:`;
+  const prefix = `DT${typeId ?? SMART_ENTITY_TYPE_ID}_${categoryId}:`;
   const opts = pack.order.map(sid => {
     const st = pack.byId[sid] || {};
     return `<option value="${prefix}${sid}" ${sid===statusId?'selected':''}>${st.NAME||sid}</option>`;
@@ -143,11 +153,59 @@ function stageSegbar(it) {
 
   return `
     <div class="stage">
-      <div class="segbar">${segs || ''}</div>
+      <div class="segbar">${segs}</div>
       <select class="stageSel" data-id="${Number(it.id||it.ID)}" data-cur="${String(it.stageId)}">
         ${opts}
       </select>
     </div>`;
+}
+
+function bindRowHandlers() {
+  // открыть элемент
+  $$('#rows [data-act="open-item"]').forEach(a => {
+    a.onclick = (e) => {
+      e.preventDefault();
+      const id = Number(a.dataset.id);
+      openBxPath(`/crm/type/${SMART_ENTITY_TYPE_ID}/details/${id}/`);
+    };
+  });
+
+  // открыть ответственного
+  $$('#rows [data-act="open-user"]').forEach(a => {
+    a.onclick = (e) => {
+      e.preventDefault();
+      const uid = Number(a.dataset.uid);
+      openBxPath(`/company/personal/user/${uid}/`);
+    };
+  });
+
+  // удалить связь
+  $$('#rows [data-act="unlink"]').forEach(btn => {
+    btn.onclick = async () => {
+      const id = Number(btn.dataset.id);
+      S.ids = S.ids.filter(x => Number(x) !== id);
+      await updateDealLinkedIds(S.dealId, DEAL_FIELD_CODE, S.ids, SMART_ENTITY_TYPE_ID);
+      S.items = S.items.filter(it => Number(it.id||it.ID) !== id);
+      render();
+    };
+  });
+
+  // смена стадии
+  $$('#rows .stageSel').forEach(sel => {
+    sel.onchange = async () => {
+      const id = Number(sel.dataset.id);
+      const newStage = sel.value;
+      const ok = await updateItemStage(SMART_ENTITY_TYPE_ID, id, newStage);
+      if (ok) {
+        const it = S.items.find(x => Number(x.id||x.ID) === id);
+        if (it) it.stageId = newStage;
+        render();
+      } else {
+        sel.value = sel.dataset.cur;
+        alert('Не удалось обновить стадию');
+      }
+    };
+  });
 }
 
 // ---------- Filters ----------
@@ -195,31 +253,21 @@ function applyColsVisibility() {
   });
 }
 function openColsModal() {
-  if (!S.colsOrder.length) readColsFromHead();
-
-  const LABELS = {
-    id:'ID', title:'Название', ass:'Ответственный', stage:'Стадия',
-    deal:'ID исходной сделки', key:'Лицензионный ключ', url:'Адрес портала',
-    tariff:'Текущий тариф', tEnd:'Окончание тарифа', mEnd:'Окончание подписки',
-    product:'Продукт', act:'Действия'
-  };
-
-  ui.colList.innerHTML = S.colsOrder.map(k =>
-    `<label><input type="checkbox" value="${k}" ${S.colsVisible.has(k)?'checked':''}> ${LABELS[k]||k}</label>`
+  if (!ui.colModal) return;
+  const title = (c) => COL_TITLES[c] || c;
+  ui.colList.innerHTML = ALL_COLUMNS.map(code =>
+    `<label><input type="checkbox" data-col="${code}" ${S.colsVisible[code]?'checked':''}> ${title(code)}</label>`
   ).join('');
   ui.colModal.style.display = 'flex';
 
-  ui.colCancel.onclick = () => { ui.colModal.style.display = 'none'; };
   ui.colApply.onclick = () => {
-    const boxes = [...ui.colList.querySelectorAll('input[type="checkbox"]')];
-    const next = boxes.filter(b => b.checked).map(b => b.value);
-    if (next.length) {
-      S.colsVisible = new Set(next);
-      localStorage.setItem('colsVisible_v2', JSON.stringify(next));
-      render();                // <- здесь должна вызываться локальная render(), не renderTable()
-    }
+    $$('input[type="checkbox"][data-col]', ui.colList)
+      .forEach(ch => S.colsVisible[ch.dataset.col] = ch.checked);
+    localStorage.setItem('colsVisible', JSON.stringify(S.colsVisible));
     ui.colModal.style.display = 'none';
+    render();                    // ← было renderTable()
   };
+  ui.colCancel.onclick = () => ui.colModal.style.display = 'none';
 }
 
 function applyColsFromModal() {
@@ -267,7 +315,7 @@ function rowCells(it) {
     stage: stageSegbar(it),
     deal: dealId ?? '—',
     key: key ? String(key) : '—',
-    url: portal ? `<a href="${portal}" target="_blank" rel="noopener">${portal.replace(/^https?:\/\//,'')}</a>` : '—',
+    url: urlCell,
     tariff: tariff || '—',
     tEnd, mEnd,
     product: prod || '—',
