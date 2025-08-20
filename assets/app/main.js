@@ -14,7 +14,7 @@ import {
   searchSmartItems,
 } from './api.js';
 import { SMART_ENTITY_TYPE_ID, DEAL_FIELD_CODE, ALL_COLUMNS, COL_TITLES } from './config.js';
-import { waitBX24 } from './sdk.js';
+import { waitBX24 } from './sdk.js'; // ← ДОБАВЬ ЭТУ СТРОКУ
 
 // ---------- UI ----------
 const ui = {
@@ -490,31 +490,50 @@ function bindActions() {
 
 // ---------- Load ----------
 async function load() {
+  ui.rows.innerHTML = `<tr><td colspan="12" class="muted">Загрузка…</td></tr>`;
   try {
-    ui.rows.innerHTML = `<tr><td colspan="12" class="muted">Загрузка…</td></tr>`;
+    // 1) ID сделки из окружения / URL
     S.dealId = resolveDealId();
-    if (!S.dealId) { ui.rows.innerHTML = `<tr><td colspan="12" class="muted">Нет ID сделки</td></tr>`; return; }
+    if (!S.dealId) {
+      ui.rows.innerHTML = `<tr><td colspan="12" class="muted">Нет ID сделки</td></tr>`;
+      return;
+    }
 
+    // 2) Метаданные полей (UF/ENUM)
     const meta = await fetchFieldMeta(SMART_ENTITY_TYPE_ID);
     window.__UF_KEYMAP = meta.keymap || {};
     window.__ENUM_DICT = meta.enums  || {};
 
+    // 3) Связанные элементы SPA из сделки
     const ids = await getLinkedItemIds(S.dealId, DEAL_FIELD_CODE, SMART_ENTITY_TYPE_ID);
     S.ids = ids;
-    if (!ids.length) { ui.rows.innerHTML = `<tr><td colspan="12" class="muted">В сделке нет связанных элементов</td></tr>`; return; }
+    if (!ids.length) {
+      ui.rows.innerHTML = `<tr><td colspan="12" class="muted">В сделке нет связанных элементов</td></tr>`;
+      return;
+    }
 
+    // 4) Грузим сами элементы
     const select = buildSelect();
     S.items = await robustGetItemsByIds(SMART_ENTITY_TYPE_ID, ids, select);
-    if (!S.items.length) { ui.rows.innerHTML = `<tr><td colspan="12" class="muted">Не удалось загрузить элементы</td></tr>`; return; }
+    if (!S.items.length) {
+      ui.rows.innerHTML = `<tr><td colspan="12" class="muted">Не удалось загрузить элементы</td></tr>`;
+      return;
+    }
 
+    // 5) Справочники для отображения
     await buildUsers(S.items);
     await buildStages(S.items);
 
+    // 6) Рендер
     if (!S.colsOrder.length) readColsFromHead();
     render();
 
+    // 7) Подогнать высоту виджета
     if (window.BX24?.resizeWindow) {
-      setTimeout(() => BX24.resizeWindow(document.documentElement.scrollWidth, document.documentElement.scrollHeight), 150);
+      setTimeout(() => BX24.resizeWindow(
+        document.documentElement.scrollWidth,
+        document.documentElement.scrollHeight
+      ), 150);
     }
   } catch (e) {
     console.error('Load error', e);
@@ -522,12 +541,13 @@ async function load() {
   }
 }
 
+
 // ---------- Init ----------
 async function init() {
   readColsFromHead();
   bindFilters();
   bindActions();
-  await waitBX24();      // <-- ключевой момент
+  await waitBX24(); // ← ключевое: ждём SDK BX24 перед REST-вызовами
   await load();
 }
 
