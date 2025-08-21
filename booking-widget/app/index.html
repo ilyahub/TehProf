@@ -75,9 +75,7 @@
       el.style.display = !q || el.dataset.name.includes(q) ? '' : 'none';
     });
   }
-  function selectedIds(){
-    return Array.from(listEl.querySelectorAll('input[type=checkbox]:checked')).map(x=>x.value);
-  }
+  function selectedIds(){ return Array.from(listEl.querySelectorAll('input[type=checkbox]:checked')).map(x=>x.value); }
   function handlerUrl(ids){
     const tz = encodeURIComponent((tzEl.value||'').trim()||'Asia/Almaty');
     return `${HANDLER_BASE}?sections=${encodeURIComponent(ids.join(','))}&tz=${tz}`;
@@ -93,11 +91,11 @@
     BX24.callBatch(cmds, res);
   });
 
-  // Получение секций ресурсов: сначала «нормально», если недоступно — батч‑перебор ownerId
+  // ---------- ЕДИНАЯ загрузка секций ресурсов ----------
   async function discoverResourceSections() {
     const rows = [];
 
-    // 1) Попробуем «родные» методы списка ресурсов (на одних порталах есть, на других — нет)
+    // 1) Попробуем «родные» методы списка ресурсов, если они есть на портале
     const variants = ['calendar.resource.list','calendar.resource.getlist','calendar.resource.getList'];
     for (const m of variants) {
       const r = await pCall(m, {});
@@ -111,7 +109,12 @@
             const s = await pCall('calendar.section.get', { type: 'resource', ownerId });
             if (!s.error && typeof s.data === 'function') {
               const secs = s.data() || [];
-              secs.forEach(sec => { if (!sec.NAME && item.NAME) sec.NAME = item.NAME; rows.push(sec); });
+              secs.forEach(sec => {
+                if (!sec.NAME && item.NAME) sec.NAME = item.NAME;
+                rows.push(sec);
+              });
+            } else if (s.error) {
+              log(`calendar.section.get(ownerId=${ownerId}): ${s.error()} / ${s.error_description && s.error_description()}`, 'err');
             }
           }
           if (rows.length) return rows;
@@ -121,22 +124,25 @@
       }
     }
 
-    // 2) Фолбэк: быстрый батч‑перебор ownerId
+    // 2) Фолбэк: батч‑перебор ownerId (для порталов без resource.list)
     log('Метод списка ресурсов недоступен — пробую найти секции батчем…','muted');
-    const MAX = 200;      // разумный потолок id ресурсов
-    const STEP = 25;      // размер батча
+    const MAX = 200;   // предел подбора id ресурсов (при необходимости увеличишь)
+    const STEP = 25;   // размер батча
+
     for (let start = 1; start <= MAX; start += STEP) {
       const batch = {};
       for (let id = start; id < start + STEP; id++) {
         batch['s'+id] = ['calendar.section.get', { type: 'resource', ownerId: id }];
       }
       const ans = await pBatch(batch);
+
       for (const key in ans) {
         const item = ans[key];
-        // item.answer.result — массив секций или пусто; если ошибка — у item.error есть описание
+        // Успешный ответ — массив секций
         if (item && item.answer && Array.isArray(item.answer.result) && item.answer.result.length) {
           rows.push(...item.answer.result);
         }
+        // Ошибки не логируем по каждой строке, чтобы не засорять статус — важны только найденные секции
       }
     }
 
@@ -180,7 +186,7 @@
   function bind(){
     const ids = selectedIds();
     if(!ids.length){ alert('Выберите хотя бы один календарь-ресурс автомобиля'); return; }
-    // снимаем наши старые подписки (чтобы не плодить)
+    // снимаем наши старые подписки (чтоб не плодить)
     BX24.callMethod('event.get', {}, r=>{
       if(!r.error()) r.data().filter(b=> sameBase(b.handler)).forEach(b=> BX24.callMethod('event.unbind',{event:b.event,handler:b.handler},()=>{}));
     });
@@ -212,5 +218,6 @@
 
   BX24.init(()=>{ log('BX24 инициализировано. Загружаю календари…','muted'); loadSections(); });
 </script>
+
 </body>
 </html>
