@@ -85,27 +85,58 @@
   function sameBase(h){ try{const u=new URL(h); return (u.origin+u.pathname)===HANDLER_BASE;}catch{return false;} }
   function idsFromHandler(h){ try{const u=new URL(h); return (u.searchParams.get('sections')||'').split(',').filter(Boolean);}catch{return [];} }
 
-  function loadSections(){
-    listEl.classList.add('muted'); 
-    listEl.textContent = "Загрузка…";
-
-    // Параметры для календарей ресурсов (Онлайн‑запись)
-    const params = { type: 'resource', ownerId: 0 };
-
-    BX24.callMethod('calendar.section.get', params, (res) => {
-      if (res.error()) {
-        // Покажем точную ошибку и не молчим
-        log(`calendar.section.get: ${res.error()} / ${res.error_description()}`, 'err');
-        listEl.textContent = "Ошибка загрузки";
-        return;
+  // helper: безопасный вызов REST + лог в «Статус»
+  function call(method, params = {}) {
+    return new Promise(resolve => {
+      BX24.callMethod(method, params, res => {
+        if (res.error()) {
+          log(`${method}: ${res.error()} / ${res.error_description()}`, 'err');
+          resolve({ ok:false, data:[] });
+        } else {
+          resolve({ ok:true, data: res.data() || [] });
+        }
+      });
+    });
+  }
+  
+  // НОВАЯ версия: находит секции ресурсов «Онлайн‑записи»
+  async function loadSections() {
+    listEl.classList.add('muted');
+    listEl.textContent = 'Загрузка…';
+  
+    const rows = [];
+  
+    // 1) Пытаемся получить список ресурсов (машины и т.п.)
+    const r = await call('calendar.resource.list', {}); // если метода нет — в «Статус» попадёт ошибка
+    if (r.ok && r.data.length) {
+      for (const res of r.data) {
+        const ownerId = res.ID || res.id;
+        // секции ресурса
+        const s = await call('calendar.section.get', { type: 'resource', ownerId });
+        const sections = s.ok ? s.data : [];
+        sections.forEach(sec => {
+          if (!sec.NAME && res.NAME) sec.NAME = res.NAME; // подставим читаемое имя
+          rows.push(sec);
+        });
       }
-      const data = res.data() || [];
-      listEl.innerHTML = '';
-      data.forEach(s => listEl.appendChild(mkRow(s)));
-      listEl.classList.remove('muted');
+    }
+
+    // 2) Фолбэк: если ресурсов не нашли — берём все секции типа resource
+    if (!rows.length) {
+      const s = await call('calendar.section.get', { type: 'resource' /*, ownerId: 0*/ });
+      if (s.ok) rows.push(...s.data);
+    }
+  
+    // 3) Отрисовка
+    listEl.innerHTML = '';
+    if (!rows.length) {
+      listEl.textContent = 'Календари ресурсов не найдены';
+    } else {
+      rows.forEach(sec => listEl.appendChild(mkRow(sec)));
       preselect();
       filter();
-    });
+    }
+    listEl.classList.remove('muted');
   }
   function preselect(){
     BX24.callMethod('event.get', {}, r=>{
