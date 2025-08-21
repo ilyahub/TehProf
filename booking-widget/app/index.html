@@ -92,36 +92,90 @@
   });
 
   // ---------- ЕДИНАЯ загрузка секций ресурсов ----------
-  async function discoverResourceSections() {
-    const rows = [];
-
-    // 1) Попробуем «родные» методы списка ресурсов, если они есть на портале
-    const variants = ['calendar.resource.list','calendar.resource.getlist','calendar.resource.getList'];
-    for (const m of variants) {
-      const r = await pCall(m, {});
-      if (!r.error && typeof r.data === 'function') {
-        const data = r.data() || [];
-        if (Array.isArray(data) && data.length) {
-          log(`Найден метод ${m}: ${data.length} ресурс(ов)`, 'muted');
-          for (const item of data) {
-            const ownerId = item.ID || item.OWNER_ID || item.RESOURCE_ID || item.id;
-            if (!ownerId) continue;
-            const s = await pCall('calendar.section.get', { type: 'resource', ownerId });
-            if (!s.error && typeof s.data === 'function') {
-              const secs = s.data() || [];
-              secs.forEach(sec => {
-                if (!sec.NAME && item.NAME) sec.NAME = item.NAME;
-                rows.push(sec);
-              });
-            } else if (s.error) {
-              log(`calendar.section.get(ownerId=${ownerId}): ${s.error()} / ${s.error_description && s.error_description()}`, 'err');
+    async function discoverResourceSections() {
+      const rows = [];
+    
+      // 1) Сначала пробуем «родные» методы списка ресурсов (если есть на портале)
+      const variants = ['calendar.resource.list','calendar.resource.getlist','calendar.resource.getList'];
+      for (const m of variants) {
+        const r = await pCall(m, {});
+        if (!r.error && typeof r.data === 'function') {
+          const data = r.data() || [];
+          if (Array.isArray(data) && data.length) {
+            log(`Найден метод ${m}: ${data.length} ресурс(ов)`, 'muted');
+            for (const item of data) {
+              const ownerId = item.ID || item.OWNER_ID || item.RESOURCE_ID || item.id;
+              if (!ownerId) continue;
+    
+              // попробуем оба регистра параметров
+              const tries = [
+                { TYPE: 'resource', OWNER_ID: ownerId },
+                { type: 'resource', ownerId: ownerId }
+              ];
+              let got = [];
+              for (const p of tries) {
+                const s = await pCall('calendar.section.get', p);
+                if (!s.error && typeof s.data === 'function' && s.data().length) { got = s.data(); break; }
+              }
+    
+              if (got.length) {
+                got.forEach(sec => {
+                  if (!sec.NAME && item.NAME) sec.NAME = item.NAME;
+                  rows.push(sec);
+                });
+              }
             }
+            if (rows.length) return rows;
           }
-          if (rows.length) return rows;
-        } else if (r.error && r.error()) {
-          log(`${m}: ${r.error()} / ${r.error_description && r.error_description()}`, 'err');
         }
       }
+    
+      // 2) Фолбэк: перебор ownerId в обеих сигнатурах параметров
+      log('Метод списка ресурсов недоступен — пробую найти секции батчем…','muted');
+    
+      const MAX = 3000;   // верхняя граница поиска (при необходимости увеличьте)
+      const STEP = 20;    // размер одного батча
+      let found = 0;
+      let missStreak = 0;
+      let seen = new Set(); // чтобы не добавлять дубликаты секций
+    
+      for (let start = 1; start <= MAX; start += STEP) {
+        const batch = {};
+    
+        // ДВА запроса на каждый id (верхний и нижний регистр) — повышаем совместимость
+        for (let id = start; id < start + STEP; id++) {
+          batch['U'+id] = ['calendar.section.get', { TYPE: 'resource',   OWNER_ID: id }];
+          batch['L'+id] = ['calendar.section.get', { type: 'resource',   ownerId:  id }];
+        }
+    
+        const ans = await pBatch(batch);
+    
+        let hitsThisBatch = 0;
+        for (const key in ans) {
+          const item = ans[key];
+          if (item && item.answer && Array.isArray(item.answer.result) && item.answer.result.length) {
+            for (const sec of item.answer.result) {
+              const sid = String(sec.ID || sec.id || '');
+              if (!sid || seen.has(sid)) continue;
+              seen.add(sid);
+              rows.push(sec);
+              hitsThisBatch++;
+            }
+          }
+        }
+    
+        if (hitsThisBatch) {
+          found += hitsThisBatch;
+          missStreak = 0;
+        } else {
+          missStreak += STEP;
+        }
+    
+        // Если уже были попадания и долго ничего нового — выходим, чтобы не крутиться зря
+        if (found > 0 && missStreak >= 300) break;
+      }
+    
+      return rows;
     }
 
     // 2) Фолбэк: батч‑перебор ownerId (для порталов без resource.list)
