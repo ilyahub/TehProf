@@ -1,12 +1,145 @@
 <!doctype html>
 <html lang="ru">
-<meta charset="utf-8">
-<title>Booking Hook — TEST</title>
-<style>body{font:16px system-ui;padding:24px}code{background:#f5f5f5;padding:2px 6px;border-radius:6px}</style>
-<h1>Booking Hook — TEST PAGE</h1>
-<p>Если вы видите этот текст — страница <code>/app/index.html</code> обновилась правильно.</p>
-<ul>
-  <li>Дата сборки: <span id="ts"></span></li>
-  <li>Ожидаемый хендлер: <code>/api/bitrix-hook</code></li>
-</ul>
-<script>document.getElementById('ts').textContent = new Date().toISOString();</script>
+<head>
+  <meta charset="utf-8" />
+  <title>Booking Hook — выбор календарей</title>
+  <script src="https://api.bitrix24.com/api/v1/"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body{font-family:system-ui,Arial,sans-serif;margin:24px;max-width:960px}
+    .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    .card{border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin:12px 0}
+    .muted{color:#6b7280}
+    .list{max-height:380px;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;padding:8px}
+    .btn{padding:10px 16px;border-radius:10px;border:1px solid #111827;cursor:pointer}
+    .btn.primary{background:#111827;color:#fff}
+    .ok{color:#059669} .err{color:#b91c1c}
+    input[type="search"]{padding:8px 12px;width:320px;border:1px solid #e5e7eb;border-radius:10px}
+    label.item{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:8px}
+    label.item:hover{background:#f9fafb}
+    small{color:#6b7280}
+  </style>
+</head>
+<body>
+  <h2>Бронирование ТС: выбор календарей и регистрация событий</h2>
+  <p class="muted">Отметьте календари <b>автомобилей</b> (ресурсы), для которых запись нужно автоматически «растягивать» до суток. Обычные встречи в CRM затрагиваться не будут.</p>
+
+  <div class="card">
+    <div class="row">
+      <input id="q" type="search" placeholder="Поиск по названию календаря…" />
+      <button id="reload" class="btn">Обновить список</button>
+    </div>
+    <div id="list" class="list muted">Загрузка…</div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <label>Таймзона портала (опционально):</label>
+      <input id="tz" type="text" placeholder="Asia/Almaty" value="Asia/Almaty" />
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button id="bind" class="btn primary">Подписать события (Add/Update)</button>
+      <button id="unbind" class="btn">Снять все подписки этого приложения</button>
+    </div>
+    <p class="muted" style="margin-top:8px">
+      Хендлер: <code>https://booking-widget-d47.pages.dev/api/bitrix-hook</code><br/>
+      Выбор будет передан в хендлер как <code>?sections=ID1,ID2&amp;tz=…</code>
+    </p>
+  </div>
+
+  <div class="card">
+    <b>Статус</b>
+    <pre id="log" style="white-space:pre-wrap"></pre>
+  </div>
+
+<script>
+  const HANDLER_BASE = "https://booking-widget-d47.pages.dev/api/bitrix-hook";
+  const logEl = document.getElementById('log');
+  const listEl = document.getElementById('list');
+  const qEl = document.getElementById('q');
+  const tzEl = document.getElementById('tz');
+
+  function log(msg, cls){ const d=document.createElement('div'); if(cls) d.className=cls; d.textContent=msg; logEl.appendChild(d); }
+  function mkRow(s){
+    const lbl = document.createElement('label'); lbl.className="item";
+    const cb  = document.createElement('input'); cb.type="checkbox"; cb.value=String(s.ID||s.id);
+    const name= document.createElement('span'); name.textContent=s.NAME||s.name||'(без названия)';
+    const small=document.createElement('small');
+    small.textContent = `#${s.ID} • ${s.CAL_TYPE||s.type||''}${s.RESOURCE_TYPE?' • '+s.RESOURCE_TYPE:''}`;
+    lbl.appendChild(cb); lbl.appendChild(name); lbl.appendChild(small);
+    lbl.dataset.name = (s.NAME||'').toLowerCase();
+    return lbl;
+  }
+  function filter(){ const q=qEl.value.trim().toLowerCase();
+    Array.from(listEl.querySelectorAll('label.item')).forEach(el=>{
+      el.style.display = !q || el.dataset.name.includes(q) ? '' : 'none';
+    });
+  }
+  function selectedIds(){
+    return Array.from(listEl.querySelectorAll('input[type=checkbox]:checked')).map(x=>x.value);
+  }
+  function handlerUrl(ids){
+    const tz = encodeURIComponent((tzEl.value||'').trim()||'Asia/Almaty');
+    return `${HANDLER_BASE}?sections=${encodeURIComponent(ids.join(','))}&tz=${tz}`;
+  }
+  function sameBase(h){ try{const u=new URL(h); return (u.origin+u.pathname)===HANDLER_BASE;}catch{return false;} }
+  function idsFromHandler(h){ try{const u=new URL(h); return (u.searchParams.get('sections')||'').split(',').filter(Boolean);}catch{return [];} }
+
+  function loadSections(){
+    listEl.classList.add('muted'); listEl.textContent="Загрузка…";
+    BX24.callMethod('calendar.section.get', {}, res=>{
+      if(res.error()){ log(`calendar.section.get: ${res.error()} / ${res.error_description()}`,'err'); listEl.textContent="Ошибка загрузки"; return; }
+      const data = res.data();
+      listEl.innerHTML='';
+      data.forEach(s=> listEl.appendChild(mkRow(s)));
+      listEl.classList.remove('muted');
+      preselect();
+      filter();
+    });
+  }
+  function preselect(){
+    BX24.callMethod('event.get', {}, r=>{
+      if(r.error()) return;
+      const binds = r.data().filter(b=> sameBase(b.handler));
+      if(!binds.length){ log('Наших подписок пока нет.','muted'); return; }
+      const ids = new Set(); binds.forEach(b=> idsFromHandler(b.handler).forEach(x=>ids.add(x)));
+      listEl.querySelectorAll('input[type=checkbox]').forEach(cb=>{ if(ids.has(cb.value)) cb.checked=true; });
+      log(`Найдены активные подписки: ${Array.from(ids).join(',')||'—'}`);
+    });
+  }
+  function bind(){
+    const ids = selectedIds();
+    if(!ids.length){ alert('Выберите хотя бы один календарь-ресурс автомобиля'); return; }
+    // снять наши старые подписки (чтобы не плодить)
+    BX24.callMethod('event.get', {}, r=>{
+      if(!r.error()) r.data().filter(b=> sameBase(b.handler)).forEach(b=> BX24.callMethod('event.unbind',{event:b.event,handler:b.handler},()=>{}));
+    });
+    const h = handlerUrl(ids);
+    ['onCalendarEventAdd','onCalendarEventUpdate'].forEach(ev=>{
+      BX24.callMethod('event.bind', {event:ev, handler:h}, res=>{
+        if(res.error()) log(`bind ${ev}: ${res.error()} / ${res.error_description()}`,'err');
+        else log(`OK bind ${ev} → ${h}`,'ok');
+      });
+    });
+  }
+  function unbind(){
+    BX24.callMethod('event.get', {}, r=>{
+      if(r.error()){ log(`event.get: ${r.error()} / ${r.error_description()}`,'err'); return; }
+      r.data().filter(b=> sameBase(b.handler)).forEach(b=>{
+        BX24.callMethod('event.unbind',{event:b.event,handler:b.handler}, res=>{
+          if(res.error()) log(`unbind ${b.event}: ${res.error()} / ${res.error_description()}`,'err');
+          else log(`Снята подписка ${b.event}`,'ok');
+        });
+      });
+    });
+  }
+
+  document.getElementById('bind').onclick = bind;
+  document.getElementById('unbind').onclick = unbind;
+  document.getElementById('reload').onclick = loadSections;
+  document.getElementById('q').oninput = filter;
+
+  BX24.init(()=>{ log('BX24 инициализировано. Загружаю календари…','muted'); loadSections(); });
+</script>
+</body>
+</html>
