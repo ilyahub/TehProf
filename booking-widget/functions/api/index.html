@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Booking Hook Binder</title>
+  <script src="https://api.bitrix24.com/api/v1/"></script>
+</head>
+<body>
+  <h3>Регистрация событий календаря…</h3>
+  <pre id="log"></pre>
+  <script>
+    function log(msg){ document.getElementById('log').textContent += msg + "\n"; }
+
+    BX24.init(async function () {
+      log("BX24 инициализировано.");
+
+      // URL вашего обработчика (Cloudflare Pages Functions)
+      const HANDLER = "https://booking-widget-d47.pages.dev/api/bitrix-hook";
+
+      // Подпишемся на создание и изменение события календаря
+      const binds = [
+        ["onCalendarEventAdd", HANDLER],
+        ["onCalendarEventUpdate", HANDLER]
+      ];
+
+      for (const [event, handler] of binds) {
+        await new Promise((resolve) => {
+          BX24.callMethod(
+            "event.bind",
+            { event, handler },
+            function (res) {
+              if (res.error()) {
+                log("Ошибка bind " + event + ": " + res.error() + " / " + res.error_description());
+              } else {
+                log("OK bind " + event + ": " + JSON.stringify(res.data()));
+              }
+              resolve();
+            }
+          );
+        });
+      }
+
+      // Показать список подписок для проверки
+      BX24.callMethod("event.get", {}, function (res) {
+        if (res.error()) {
+          log("Ошибка event.get: " + res.error() + " / " + res.error_description());
+        } else {
+          log("Текущие подписки:\n" + JSON.stringify(res.data(), null, 2));
+        }
+      });
+    });
+  </script>
+</body>
+</html>  
