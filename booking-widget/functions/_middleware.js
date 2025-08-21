@@ -1,20 +1,17 @@
+// booking-widget/functions/_middleware.js
 export async function onRequest(context) {
-  const { request, next } = context;
+  const res = await context.next();                          // отдать как есть
+  const { pathname } = new URL(context.request.url);
 
-  // если HTML — пропускаем дальше без изменений
-  const url = new URL(request.url);
-  if (url.pathname.endsWith(".html") || url.pathname === "/" || url.pathname.startsWith("/app")) {
-    const response = await next();
-    // добавим заголовки только для app/*
-    if (url.pathname.startsWith("/app")) {
-      response.headers.set(
-        "Content-Security-Policy",
-        "frame-ancestors https://tehprof.bitrix24.kz https://*.bitrix24.kz https://*.bitrix24.com"
-      );
-    }
-    return response;
+  if (pathname.startsWith("/app/")) {                        // только для /app/*
+    // Разрешаем встраивание в Bitrix24
+    res.headers.set(
+      "Content-Security-Policy",
+      "frame-ancestors https://tehprof.bitrix24.kz https://*.bitrix24.kz https://*.bitrix24.com"
+    );
+    // На всякий случай убираем возможный X-Frame-Options
+    res.headers.delete("X-Frame-Options");
   }
 
-  // иначе просто продолжаем
-  return await next();
+  return res;
 }
