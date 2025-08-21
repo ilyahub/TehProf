@@ -239,7 +239,7 @@ function readColsFromHead() {
   const saved = JSON.parse(localStorage.getItem('colsVisible_v2') || 'null');
   S.colsVisible = saved ? new Set(saved) : new Set(S.colsOrder);
   // проверка
-  const isColOn = (code) => S.colsVisible.has(code);
+//  const isColOn = (code) => S.colsVisible.has(code);
 
 }
 //function isColOn(code){ return !!S.colsVisible[code]; }
@@ -402,7 +402,7 @@ async function loadSmartList(query = '') {
 async function openSmartPicker() {
   const modal = ensureSmartPicker();
   modal.style.display = 'flex';
-  await load();            // актуализируем users/stages
+//  await load();            // актуализируем users/stages
   await loadSmartList('');
   $('#spSearch').onclick = () => loadSmartList(($('#spQuery').value || '').trim());
   $('#spCancel').onclick = () => modal.style.display = 'none';
