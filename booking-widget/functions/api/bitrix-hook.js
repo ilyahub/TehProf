@@ -1,54 +1,113 @@
-// Cloudflare Pages Functions: POST-хук от Bitrix24
+// Cloudflare Pages Functions — обработчик событий Bitrix24 для «сутки слота»
+// НЕ использует входящий вебхук. Берёт OAuth-токен из body: auth[access_token], auth[domain].
+//
+// URL вызывается Битриксом как POST (form-urlencoded или JSON).
+// Ожидает query: ?sections=1,2,3&tz=Asia/Almaty  — список календарей-ресурсов (автомобилей), для которых применять правило.
+
+async function parseIncoming(request) {
+  const ct = request.headers.get('content-type') || '';
+  if (ct.includes('application/json')) {
+    const j = await request.json();
+    return j;
+  }
+  // x-www-form-urlencoded
+  const text = await request.text();
+  const p = new URLSearchParams(text);
+  // раскукожим в объект наподобие PHP-формата: data[FIELDS][ID], auth[access_token], …
+  const obj = {};
+  for (const [k, v] of p.entries()) {
+    const path = k.replace(/\]/g,'').split('['); // 'data[FIELDS][ID]' -> ['data','FIELDS','ID']
+    let cur = obj;
+    while (path.length > 1) {
+      const key = path.shift();
+      if (!(key in cur)) cur[key] = {};
+      cur = cur[key];
+    }
+    cur[path[0]] = v;
+  }
+  return obj;
+}
+
 export async function onRequestPost(ctx) {
   try {
-    const payload = await ctx.request.json();            // тело от Bitrix24
-    const event   = payload?.event;
-    const evId    = payload?.data?.FIELDS?.ID;
+    const { request } = ctx;
+    const url = new URL(request.url);
 
-    if (!evId) return new Response('no event id', { status: 400 });
+    // 1) Разбор входящих данных (универсально: JSON или form-url-encoded)
+    const payload = await parseIncoming(request);
 
-    // 1) Получаем событие целиком
-    const bx = ctx.env.BITRIX_WEBHOOK; // https://<portal>/rest/<user>/<token>/
-    const getUrl = `${bx}calendar.event.getbyid.json?id=${encodeURIComponent(evId)}`;
-    const evResp = await fetch(getUrl);
-    const evData = await evResp.json();
-    const item   = evData?.result;
+    const eventType = payload?.event || payload?.EVENT;
+    const eventId   = payload?.data?.FIELDS?.ID || payload?.data?.fields?.ID;
+    const auth      = payload?.auth || {};
+    const access    = auth?.access_token;
+    const domain    = auth?.domain; // напр. 'tehprof.bitrix24.kz'
 
+    if (!eventId) return new Response('no event id', { status: 400 });
+    if (!access || !domain) return new Response('no oauth token or domain', { status: 401 });
+
+    // 2) Разрешённые календари (переданы в URL при bind)
+    const allowed = (url.searchParams.get('sections') || '')
+      .split(',').map(s=>s.trim()).filter(Boolean);
+
+    const tz = url.searchParams.get('tz') || 'Asia/Almaty'; // на будущее
+
+    const base = `https://${domain}/rest/`;
+
+    // helper: GET /rest/method?params…&auth=token
+    const restGet = (method, params={}) => {
+      const u = new URL(base + method);
+      for (const [k,v] of Object.entries(params)) u.searchParams.set(k, String(v));
+      u.searchParams.set('auth', access);
+      return fetch(u.toString());
+    };
+    // helper: POST /rest/method?auth=token (JSON)
+    const restPost = (method, body={}) => {
+      const u = new URL(base + method);
+      u.searchParams.set('auth', access);
+      return fetch(u.toString(), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+    };
+
+    // 3) Получаем событие целиком
+    const evR = await restGet('calendar.event.getbyid.json', { id: eventId });
+    const evJ = await evR.json();
+    const item = evJ?.result;
     if (!item) return new Response('event not found', { status: 404 });
 
-    // Определяем дату (берём местную дату начала события)
-    // Пример: "2025-08-21 10:00:00"
-    const startStr = item.DATE_FROM || item.DATE_FROM_FORMATTED || item.DATE_FROM_TS_UTC;
-    const d = new Date(startStr.replace(' ', 'T')); // грубо, достаточно для суток
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth()+1).padStart(2,'0');
-    const dd = String(d.getDate()).padStart(2,'0');
-
-    const dateFrom = `${yyyy}-${mm}-${dd} 00:00:00`;
-    const dateTo   = `${yyyy}-${mm}-${dd} 23:59:00`;
-
-    // Защита от зацикливания: если уже весь день — выходим
-    if ((item.DATE_FROM?.endsWith('00:00:00') || item.SKIP_TIME === 'Y') &&
-        (item.DATE_TO?.endsWith('23:59:00')   || item.DT_SKIP_TIME === 'Y')) {
-      return new Response('already all-day', { status: 200 });
+    // 4) Фильтр по SECTION_ID (разрешённые календари автомобилей)
+    const sectionId = String(item.SECTION_ID ?? item.sectionId ?? '');
+    if (allowed.length && !allowed.includes(sectionId)) {
+      return new Response(`skip: section ${sectionId} not in allow-list`, { status: 200 });
     }
 
-    // 2) Растягиваем на сутки
-    const upd = await fetch(`${bx}calendar.event.update.json`, {
-      method: 'POST',
-      headers: { 'content-type':'application/json' },
-      body: JSON.stringify({
-        id: evId,
-        fields: {
-          DATE_FROM: dateFrom,
-          DATE_TO:   dateTo,
-          SKIP_TIME: 'N',
-          DESCRIPTION: (item.DESCRIPTION || '') + '\n#ALLDAY_SET'
-        }
-      })
+    // 5) Защита от повтора (если уже обработано)
+    const descr = String(item.DESCRIPTION || '');
+    if (descr.includes('#ALLDAY_SET')) {
+      return new Response('already processed', { status: 200 });
+    }
+
+    // 6) Вычисляем границы суток по дате начала (локальной)
+    const startStr = String(item.DATE_FROM || '').replace(' ', 'T');
+    const d = startStr ? new Date(startStr) : new Date();
+    const yyyy = d.getFullYear(), mm = String(d.getMonth()+1).padStart(2,'0'), dd = String(d.getDate()).padStart(2,'0');
+    const DATE_FROM = `${yyyy}-${mm}-${dd} 00:00:00`;
+    const DATE_TO   = `${yyyy}-${mm}-${dd} 23:59:00`;
+
+    // 7) Обновляем событие
+    const updR = await restPost('calendar.event.update.json', {
+      id: eventId,
+      fields: {
+        DATE_FROM, DATE_TO, SKIP_TIME: 'N',
+        DESCRIPTION: `${descr}\n#ALLDAY_SET`
+      }
     });
-    const updRes = await upd.json();
-    return new Response(JSON.stringify({ ok:true, event, evId, updRes }), { status: 200 });
+    const updJ = await updR.json();
+
+    return new Response(JSON.stringify({ ok:true, eventType, eventId, sectionId, DATE_FROM, DATE_TO, result: updJ }), { status: 200 });
+
   } catch (e) {
     return new Response(String(e), { status: 500 });
   }
