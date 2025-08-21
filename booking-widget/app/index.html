@@ -132,7 +132,7 @@
     for (let start = 1; start <= MAX; start += STEP) {
       const batch = {};
       for (let id = start; id < start + STEP; id++) {
-        batch['s'+id] = ['calendar.section.get', { type: 'resource', ownerId: id }];
+        batch['s' + id] = ['calendar.section.get', { TYPE: 'resource', OWNER_ID: id }];
       }
       const ans = await pBatch(batch);
 
