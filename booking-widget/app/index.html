@@ -86,12 +86,22 @@
   function idsFromHandler(h){ try{const u=new URL(h); return (u.searchParams.get('sections')||'').split(',').filter(Boolean);}catch{return [];} }
 
   function loadSections(){
-    listEl.classList.add('muted'); listEl.textContent="Загрузка…";
-    BX24.callMethod('calendar.section.get', {}, res=>{
-      if(res.error()){ log(`calendar.section.get: ${res.error()} / ${res.error_description()}`,'err'); listEl.textContent="Ошибка загрузки"; return; }
-      const data = res.data();
-      listEl.innerHTML='';
-      data.forEach(s=> listEl.appendChild(mkRow(s)));
+    listEl.classList.add('muted'); 
+    listEl.textContent = "Загрузка…";
+
+    // Параметры для календарей ресурсов (Онлайн‑запись)
+    const params = { type: 'resource', ownerId: 0 };
+
+    BX24.callMethod('calendar.section.get', params, (res) => {
+      if (res.error()) {
+        // Покажем точную ошибку и не молчим
+        log(`calendar.section.get: ${res.error()} / ${res.error_description()}`, 'err');
+        listEl.textContent = "Ошибка загрузки";
+        return;
+      }
+      const data = res.data() || [];
+      listEl.innerHTML = '';
+      data.forEach(s => listEl.appendChild(mkRow(s)));
       listEl.classList.remove('muted');
       preselect();
       filter();
