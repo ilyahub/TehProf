@@ -1,20 +1,21 @@
-// booking-widget/functions/index.js
 export async function onRequest(context) {
-  // Всегда отдаем /app/index.html независимо от метода (GET/POST)
-  const url = new URL(context.request.url);
-  const assetReq = new Request(url.origin + "/app/index.html", { method: "GET" });
-  const assetRes = await context.env.ASSETS.fetch(assetReq);
+  const { request, env } = context;
+  const url = new URL(request.url);
+
+  // пересобираем URL: /app/index.html + исходные query (?DOMAIN=..., LANG=..., ...)
+  const target = new URL("/app/index.html" + (url.search || ""), url.origin);
+
+  // всегда читаем статику GET-ом, чтобы не было 405 на POST
+  const assetRes = await env.ASSETS.fetch(new Request(target, { method: "GET" }));
 
   const res = new Response(assetRes.body, {
     status: assetRes.status,
     headers: assetRes.headers
   });
-  // Разрешаем встраивание в Bitrix24
   res.headers.set(
     "Content-Security-Policy",
     "frame-ancestors https://tehprof.bitrix24.kz https://*.bitrix24.kz https://*.bitrix24.com"
   );
-  // На всякий случай снимаем X-Frame-Options
   res.headers.delete("X-Frame-Options");
   return res;
 }
