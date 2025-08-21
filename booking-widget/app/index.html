@@ -85,59 +85,87 @@
   function sameBase(h){ try{const u=new URL(h); return (u.origin+u.pathname)===HANDLER_BASE;}catch{return false;} }
   function idsFromHandler(h){ try{const u=new URL(h); return (u.searchParams.get('sections')||'').split(',').filter(Boolean);}catch{return [];} }
 
-  // helper: безопасный вызов REST + лог в «Статус»
-  function call(method, params = {}) {
-    return new Promise(resolve => {
-      BX24.callMethod(method, params, res => {
-        if (res.error()) {
-          log(`${method}: ${res.error()} / ${res.error_description()}`, 'err');
-          resolve({ ok:false, data:[] });
-        } else {
-          resolve({ ok:true, data: res.data() || [] });
-        }
-      });
-    });
-  }
-  
-  // НОВАЯ версия: находит секции ресурсов «Онлайн‑записи»
-  async function loadSections() {
-    listEl.classList.add('muted');
-    listEl.textContent = 'Загрузка…';
-  
+  // ---------- Promise-обёртки над BX24 ----------
+  const pCall = (method, params={}) => new Promise(res=>{
+    BX24.callMethod(method, params, r => res(r));
+  });
+  const pBatch = (cmds) => new Promise(res=>{
+    BX24.callBatch(cmds, res);
+  });
+
+  // Получение секций ресурсов: сначала «нормально», если недоступно — батч‑перебор ownerId
+  async function discoverResourceSections() {
     const rows = [];
-  
-    // 1) Пытаемся получить список ресурсов (машины и т.п.)
-    const r = await call('calendar.resource.list', {}); // если метода нет — в «Статус» попадёт ошибка
-    if (r.ok && r.data.length) {
-      for (const res of r.data) {
-        const ownerId = res.ID || res.id;
-        // секции ресурса
-        const s = await call('calendar.section.get', { type: 'resource', ownerId });
-        const sections = s.ok ? s.data : [];
-        sections.forEach(sec => {
-          if (!sec.NAME && res.NAME) sec.NAME = res.NAME; // подставим читаемое имя
-          rows.push(sec);
-        });
+
+    // 1) Попробуем «родные» методы списка ресурсов (на одних порталах есть, на других — нет)
+    const variants = ['calendar.resource.list','calendar.resource.getlist','calendar.resource.getList'];
+    for (const m of variants) {
+      const r = await pCall(m, {});
+      if (!r.error && typeof r.data === 'function') {
+        const data = r.data() || [];
+        if (Array.isArray(data) && data.length) {
+          log(`Найден метод ${m}: ${data.length} ресурс(ов)`, 'muted');
+          for (const item of data) {
+            const ownerId = item.ID || item.OWNER_ID || item.RESOURCE_ID || item.id;
+            if (!ownerId) continue;
+            const s = await pCall('calendar.section.get', { type: 'resource', ownerId });
+            if (!s.error && typeof s.data === 'function') {
+              const secs = s.data() || [];
+              secs.forEach(sec => { if (!sec.NAME && item.NAME) sec.NAME = item.NAME; rows.push(sec); });
+            }
+          }
+          if (rows.length) return rows;
+        } else if (r.error && r.error()) {
+          log(`${m}: ${r.error()} / ${r.error_description && r.error_description()}`, 'err');
+        }
       }
     }
 
-    // 2) Фолбэк: если ресурсов не нашли — берём все секции типа resource
-    if (!rows.length) {
-      const s = await call('calendar.section.get', { type: 'resource' /*, ownerId: 0*/ });
-      if (s.ok) rows.push(...s.data);
+    // 2) Фолбэк: быстрый батч‑перебор ownerId
+    log('Метод списка ресурсов недоступен — пробую найти секции батчем…','muted');
+    const MAX = 200;      // разумный потолок id ресурсов
+    const STEP = 25;      // размер батча
+    for (let start = 1; start <= MAX; start += STEP) {
+      const batch = {};
+      for (let id = start; id < start + STEP; id++) {
+        batch['s'+id] = ['calendar.section.get', { type: 'resource', ownerId: id }];
+      }
+      const ans = await pBatch(batch);
+      for (const key in ans) {
+        const item = ans[key];
+        // item.answer.result — массив секций или пусто; если ошибка — у item.error есть описание
+        if (item && item.answer && Array.isArray(item.answer.result) && item.answer.result.length) {
+          rows.push(...item.answer.result);
+        }
+      }
     }
-  
-    // 3) Отрисовка
-    listEl.innerHTML = '';
-    if (!rows.length) {
-      listEl.textContent = 'Календари ресурсов не найдены';
-    } else {
-      rows.forEach(sec => listEl.appendChild(mkRow(sec)));
-      preselect();
-      filter();
-    }
-    listEl.classList.remove('muted');
+
+    return rows;
   }
+
+  async function loadSections(){
+    listEl.classList.add('muted');
+    listEl.textContent = 'Загрузка…';
+
+    try {
+      const sections = await discoverResourceSections();
+
+      listEl.innerHTML = '';
+      if (!sections.length) {
+        listEl.textContent = 'Календари ресурсов не найдены';
+      } else {
+        sections.forEach(s => listEl.appendChild(mkRow(s)));
+        preselect();
+        filter();
+      }
+    } catch (e) {
+      log(String(e), 'err');
+      listEl.textContent = 'Ошибка загрузки';
+    } finally {
+      listEl.classList.remove('muted');
+    }
+  }
+
   function preselect(){
     BX24.callMethod('event.get', {}, r=>{
       if(r.error()) return;
@@ -148,21 +176,23 @@
       log(`Найдены активные подписки: ${Array.from(ids).join(',')||'—'}`);
     });
   }
+
   function bind(){
     const ids = selectedIds();
     if(!ids.length){ alert('Выберите хотя бы один календарь-ресурс автомобиля'); return; }
-    // снять наши старые подписки (чтобы не плодить)
+    // снимаем наши старые подписки (чтобы не плодить)
     BX24.callMethod('event.get', {}, r=>{
       if(!r.error()) r.data().filter(b=> sameBase(b.handler)).forEach(b=> BX24.callMethod('event.unbind',{event:b.event,handler:b.handler},()=>{}));
     });
     const h = handlerUrl(ids);
     ['onCalendarEventAdd','onCalendarEventUpdate'].forEach(ev=>{
-      BX24.callMethod('event.bind', {event:ev, handler:h}, res=>{
+      BX24.callMethod('event.bind', { event: ev, handler: h }, res=>{
         if(res.error()) log(`bind ${ev}: ${res.error()} / ${res.error_description()}`,'err');
         else log(`OK bind ${ev} → ${h}`,'ok');
       });
     });
   }
+
   function unbind(){
     BX24.callMethod('event.get', {}, r=>{
       if(r.error()){ log(`event.get: ${r.error()} / ${r.error_description()}`,'err'); return; }
