@@ -83,115 +83,140 @@
   function sameBase(h){ try{const u=new URL(h); return (u.origin+u.pathname)===HANDLER_BASE;}catch{return false;} }
   function idsFromHandler(h){ try{const u=new URL(h); return (u.searchParams.get('sections')||'').split(',').filter(Boolean);}catch{return [];} }
 
-  // ---------- Promise-обёртки над BX24 ----------
-  const pCall = (method, params={}) => new Promise(res=>{
-    BX24.callMethod(method, params, r => res(r));
-  });
-  const pBatch = (cmds) => new Promise(res=>{
-    BX24.callBatch(cmds, res);
-  });
+ // ---------- Promise-обёртки над BX24 ----------
+  const pCall  = (method, params={}) => new Promise(res => BX24.callMethod(method, params, r => res(r)));
+  const pBatch = (cmds)               => new Promise(res => BX24.callBatch(cmds, res));
 
-  // ---------- ЕДИНАЯ загрузка секций ресурсов ----------
-    async function discoverResourceSections() {
-      const rows = [];
-    
-      // 1) Сначала пробуем «родные» методы списка ресурсов (если есть на портале)
-      const variants = ['calendar.resource.list','calendar.resource.getlist','calendar.resource.getList'];
-      for (const m of variants) {
-        const r = await pCall(m, {});
-        if (!r.error && typeof r.data === 'function') {
-          const data = r.data() || [];
-          if (Array.isArray(data) && data.length) {
-            log(`Найден метод ${m}: ${data.length} ресурс(ов)`, 'muted');
-            for (const item of data) {
-              const ownerId = item.ID || item.OWNER_ID || item.RESOURCE_ID || item.id;
-              if (!ownerId) continue;
-    
-              // попробуем оба регистра параметров
-              const tries = [
-                { TYPE: 'resource', OWNER_ID: ownerId },
-                { type: 'resource', ownerId: ownerId }
-              ];
-              let got = [];
-              for (const p of tries) {
-                const s = await pCall('calendar.section.get', p);
-                if (!s.error && typeof s.data === 'function' && s.data().length) { got = s.data(); break; }
-              }
-    
-              if (got.length) {
-                got.forEach(sec => {
-                  if (!sec.NAME && item.NAME) sec.NAME = item.NAME;
+  // >>>>>>>>>>>>>>> ЗАМЕНИТЬ ЭТОТ БЛОК <<<<<<<<<<<<<<
+  // ЕДИНАЯ загрузка секций ресурсов с расширенным поиском
+  async function discoverResourceSections() {
+    const rows = [];
+    const seen = new Set(); // защитимся от дублей
+
+    // 1) «Родные» методы списка ресурсов (если модуль это отдаёт)
+    const variants = ['calendar.resource.list','calendar.resource.getlist','calendar.resource.getList'];
+    for (const m of variants) {
+      const r = await pCall(m, {});
+      if (!r.error && typeof r.data === 'function') {
+        const data = r.data() || [];
+        if (Array.isArray(data) && data.length) {
+          log(`Найден метод ${m}: ${data.length} ресурс(ов)`, 'muted');
+          for (const it of data) {
+            const ownerId = it.ID || it.OWNER_ID || it.RESOURCE_ID || it.id;
+            if (!ownerId) continue;
+
+            // пробуем оба регистра параметров — на разных порталах REST капризничает
+            const attempts = [
+              { TYPE:'resource', OWNER_ID: ownerId },
+              { type:'resource', ownerId:  ownerId }
+            ];
+
+            for (const p of attempts) {
+              const s = await pCall('calendar.section.get', p);
+              if (!s.error && typeof s.data === 'function') {
+                (s.data() || []).forEach(sec => {
+                  const sid = String(sec.ID || sec.id || '');
+                  if (!sid || seen.has(sid)) return;
+                  seen.add(sid);
+                  if (!sec.NAME && it.NAME) sec.NAME = it.NAME;
                   rows.push(sec);
                 });
+                if (rows.length) return rows;
               }
             }
-            if (rows.length) return rows;
           }
         }
       }
-    
-      // 2) Фолбэк: перебор ownerId в обеих сигнатурах параметров
-      log('Метод списка ресурсов недоступен — пробую найти секции батчем…','muted');
-    
-      const MAX = 3000;   // верхняя граница поиска (при необходимости увеличьте)
-      const STEP = 20;    // размер одного батча
-      let found = 0;
-      let missStreak = 0;
-      let seen = new Set(); // чтобы не добавлять дубликаты секций
-    
-      for (let start = 1; start <= MAX; start += STEP) {
-        const batch = {};
-    
-        // ДВА запроса на каждый id (верхний и нижний регистр) — повышаем совместимость
-        for (let id = start; id < start + STEP; id++) {
-          batch['U'+id] = ['calendar.section.get', { TYPE: 'resource',   OWNER_ID: id }];
-          batch['L'+id] = ['calendar.section.get', { type: 'resource',   ownerId:  id }];
-        }
-    
-        const ans = await pBatch(batch);
-    
-        let hitsThisBatch = 0;
-        for (const key in ans) {
-          const item = ans[key];
-          if (item && item.answer && Array.isArray(item.answer.result) && item.answer.result.length) {
-            for (const sec of item.answer.result) {
-              const sid = String(sec.ID || sec.id || '');
-              if (!sid || seen.has(sid)) continue;
-              seen.add(sid);
-              rows.push(sec);
-              hitsThisBatch++;
-            }
-          }
-        }
-    
-        if (hitsThisBatch) {
-          found += hitsThisBatch;
-          missStreak = 0;
-        } else {
-          missStreak += STEP;
-        }
-    
-        // Если уже были попадания и долго ничего нового — выходим, чтобы не крутиться зря
-        if (found > 0 && missStreak >= 300) break;
-      }
-    
-      return rows;
     }
+
+    // 2) Фолбэк по ownerId: перебираем гораздо шире
+    log('Метод списка ресурсов недоступен — ищу секции по ownerId батчами…', 'muted');
+    await scanByOwnerId(rows, seen);
+    if (rows.length) return rows;
+
+    // 3) Последний шанс: прямой перебор ID секций и фильтр по CAL_TYPE=resource
+    log('По ownerId не найдено — пробую прямой перебор ID секций…', 'muted');
+    await scanBySectionId(rows, seen);
+
+    return rows;
+  }
+
+  async function scanByOwnerId(out, seen) {
+    const MAX_OWNER = 200000; // было 3000 — увеличили, чтобы достать «высокие» ID
+    const STEP = 25;
+    let found = 0, miss = 0;
+
+    for (let start = 1; start <= MAX_OWNER; start += STEP) {
+      const batch = {};
+      for (let id = start; id < start + STEP; id++) {
+        batch['U'+id] = ['calendar.section.get', { TYPE:'resource', OWNER_ID:id }];
+        batch['L'+id] = ['calendar.section.get', { type:'resource', ownerId:id }];
+      }
+      const ans = await pBatch(batch);
+
+      let hits = 0;
+      for (const k in ans) {
+        const a = ans[k];
+        const res = a && a.answer && Array.isArray(a.answer.result) ? a.answer.result : [];
+        res.forEach(sec => {
+          const sid = String(sec.ID || sec.id || '');
+          if (!sid || seen.has(sid)) return;
+          seen.add(sid);
+          out.push(sec);
+          hits++;
+        });
+      }
+      if (hits) { found += hits; miss = 0; } else { miss += STEP; }
+
+      // как только что‑то нашли и пошла длинная серия промахов — выходим,
+      // чтобы не гонять пустые батчи бесконечно
+      if (found > 0 && miss >= 1000) break;
+    }
+  }
+
+  async function scanBySectionId(out, seen) {
+    const MAX_ID = 300000; // при необходимости можно поднять
+    const STEP   = 25;
+    let found = 0, miss = 0;
+
+    for (let start = 1; start <= MAX_ID; start += STEP) {
+      const batch = {};
+      for (let id = start; id < start + STEP; id++) {
+        batch['I'+id] = ['calendar.section.get', { id }];
+      }
+      const ans = await pBatch(batch);
+
+      let hits = 0;
+      for (const k in ans) {
+        const a = ans[k];
+        const res = a && a.answer && Array.isArray(a.answer.result) ? a.answer.result : [];
+        res.forEach(sec => {
+          const sid = String(sec.ID || sec.id || '');
+          // интересуют только ресурсные секции
+          const calType = String(sec.CAL_TYPE || sec.type || '').toLowerCase();
+          if (!sid || seen.has(sid) || calType !== 'resource') return;
+          seen.add(sid);
+          out.push(sec);
+          hits++;
+        });
+      }
+      if (hits) { found += hits; miss = 0; } else { miss += STEP; }
+      if (found > 0 && miss >= 1500) break;
+    }
+  }
+  // <<<<<<<<<<<<<<<<<<<< КОНЕЦ ЗАМЕНЫ <<<<<<<<<<<<<<<<<<<<
 
   async function loadSections(){
     listEl.classList.add('muted');
     listEl.textContent = 'Загрузка…';
-
     try {
       const sections = await discoverResourceSections();
-
       listEl.innerHTML = '';
       if (!sections.length) {
         listEl.textContent = 'Календари ресурсов не найдены';
       } else {
         sections.forEach(s => listEl.appendChild(mkRow(s)));
-        preselect();
-        filter();
+        preselect(); filter();
       }
     } catch (e) {
       log(String(e), 'err');
