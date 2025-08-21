@@ -1,0 +1,3 @@
+/app/*
+  Content-Security-Policy: frame-ancestors https://tehprof.bitrix24.kz https://*.bitrix24.kz https://*.bitrix24.com;
+  X-Frame-Options: ALLOW-FROM https://tehprof.bitrix24.kz
