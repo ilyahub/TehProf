@@ -90,54 +90,40 @@
 // ---------- ЕДИНАЯ загрузка секций ресурсов (обновлённая) ----------
 async function discoverResourceSections() {
   const rows = [];
-  const seen = new Set();
 
-  // 1) Если на портале есть один из «родных» методов списка ресурсов — используем его
+  // 0) Диагностика: какие "resource"-методы есть на портале
+  try {
+    const m = await pCall('methods', { filter: { name: '%resource%' } });
+    if (!m.error && typeof m.data === 'function') {
+      const list = m.data() || [];
+      log('Доступные методы c "resource": ' + (list.map(x => x.NAME || x).join(', ') || 'нет'), 'muted');
+    }
+  } catch(e){}
+
+  // 1) Пытаемся использовать "родные" методы ресурса календаря
   const variants = ['calendar.resource.list','calendar.resource.getlist','calendar.resource.getList'];
-  for (const m of variants) {
-    const r = await pCall(m, {});
+  for (const meth of variants) {
+    const r = await pCall(meth, {});
     if (!r.error && typeof r.data === 'function') {
       const data = r.data() || [];
       if (Array.isArray(data) && data.length) {
-        log(`Найден метод ${m}: ${data.length} ресурс(ов)`, 'muted');
-
-        // для каждого ресурса берём ownerId в нескольких формах
+        log(`Найден ${meth}: ${data.length} ресурс(ов)`, 'muted');
         for (const item of data) {
-          const baseId = item.ID || item.OWNER_ID || item.RESOURCE_ID || item.id;
-          if (!baseId) continue;
-
-          const ownerCandidates = [
-            String(baseId),                  // "12"
-            `resource_${baseId}`,            // "resource_12"
-            `RESOURCE_${baseId}`             // "RESOURCE_12" (на всякий случай)
-          ];
-
-          // пробуем оба регистра имён параметров
-          const paramVariants = (ownerId) => ([
+          const ownerId = item.ID || item.OWNER_ID || item.RESOURCE_ID || item.id;
+          if (!ownerId) continue;
+          const tries = [
             { TYPE: 'resource', OWNER_ID: ownerId },
-            { type: 'resource', ownerId:  ownerId }
-          ]);
-
-          let got = [];
-          for (const ownerId of ownerCandidates) {
-            for (const p of paramVariants(ownerId)) {
-              const s = await pCall('calendar.section.get', p);
-              if (!s.error && typeof s.data === 'function' && s.data().length) {
-                got = s.data();
-                break;
-              }
+            { type: 'resource', ownerId: ownerId }
+          ];
+          for (const p of tries) {
+            const s = await pCall('calendar.section.get', p);
+            if (!s.error && typeof s.data === 'function' && s.data().length) {
+              s.data().forEach(sec => {
+                if (!sec.NAME && item.NAME) sec.NAME = item.NAME;
+                rows.push(sec);
+              });
+              break;
             }
-            if (got.length) break;
-          }
-
-          if (got.length) {
-            got.forEach(sec => {
-              const sid = String(sec.ID || sec.id || '');
-              if (!sid || seen.has(sid)) return;
-              seen.add(sid);
-              if (!sec.NAME && item.NAME) sec.NAME = item.NAME;
-              rows.push(sec);
-            });
           }
         }
         if (rows.length) return rows;
@@ -145,53 +131,37 @@ async function discoverResourceSections() {
     }
   }
 
-  // 2) Фолбэк: батч‑сканирование ownerId
-  //    Пробуем и числа, и строки "resource_<id>".
+  // 2) Фолбэк: батч‑скан ownerId (расширенный)
   log('Метод списка ресурсов недоступен — пробую найти секции батчем…','muted');
 
-  const MAX = 4000;     // верхняя граница сканирования при необходимости можно поднять
-  const STEP = 20;      // размер одного батча
-  let found = 0, missStreak = 0;
+  const STEP = 20;         // запросов в одном батче (<=50)
+  const MAX  = 20000;      // верхняя граница перебора ownerId (можно увеличить при необходимости)
+  let found = 0, miss = 0;
+  const seen = new Set();
 
   for (let start = 1; start <= MAX; start += STEP) {
     const batch = {};
-
     for (let id = start; id < start + STEP; id++) {
-      const cand = [
-        String(id),            // "123"
-        `resource_${id}`,      // "resource_123"
-        `RESOURCE_${id}`       // "RESOURCE_123"
-      ];
-
-      for (const ownerId of cand) {
-        batch[`U_${id}_${ownerId}`] = ['calendar.section.get', { TYPE: 'resource', OWNER_ID: ownerId }];
-        batch[`L_${id}_${ownerId}`] = ['calendar.section.get', { type: 'resource', ownerId:  ownerId }];
-      }
+      batch['U'+id] = ['calendar.section.get', { TYPE: 'resource', OWNER_ID: id }];
+      batch['L'+id] = ['calendar.section.get', { type: 'resource', ownerId:  id }];
     }
-
     const ans = await pBatch(batch);
-
-    let hitsThisBatch = 0;
-    for (const key in ans) {
-      const item = ans[key];
+    let hits = 0;
+    for (const k in ans) {
+      const item = ans[k];
       if (item && item.answer && Array.isArray(item.answer.result) && item.answer.result.length) {
         for (const sec of item.answer.result) {
           const sid = String(sec.ID || sec.id || '');
           if (!sid || seen.has(sid)) continue;
           seen.add(sid);
           rows.push(sec);
-          hitsThisBatch++;
+          hits++;
         }
       }
     }
-
-    if (hitsThisBatch) { found += hitsThisBatch; missStreak = 0; }
-    else               { missStreak += STEP; }
-
-    // если что‑то нашли, но давно нет попаданий — выходим, чтобы не молотить зря
-    if (found > 0 && missStreak >= 300) break;
+    if (hits) { found += hits; miss = 0; } else { miss += STEP; }
+    if (found > 0 && miss >= 500) break; // долго ничего нового — останавливаемся
   }
-
   return rows;
 }
 
