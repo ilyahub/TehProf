@@ -98,26 +98,33 @@
   });
 
   // ===== ДИАГНОСТИКА ДОСТУПА (ПОКАЖЕТ SCOPES И ОШИБКИ) =====
-  async function diagnoseAccess() {
-    try {
-      const info = await pCall('app.info', {});
-      if (info.ok) {
-        const scopes = (info.data && info.data.scope) || [];
-        log('Scopes приложения: ' + (scopes.join(', ') || '—'), 'muted');
-        if (!scopes.includes('booking')) log('⚠️ У приложения нет scope "booking" — Booking API будет недоступен', 'err');
-      } else {
-        log('app.info: ' + info.error + ' ' + (info.description||''), 'err');
+async function diagnoseAccess() {
+  try {
+    const info = await pCall('app.info', {});
+    if (info.ok) {
+      const d = info.data || {};
+      // Разные варианты структуры ответа Bitrix
+      const scopes =
+        d.scope || d.SCOPE ||
+        (d.result && (d.result.scope || d.result.SCOPE)) ||
+        (d.info && (d.info.scope || d.info.SCOPE)) ||
+        [];
+      const scopesArr = Array.isArray(scopes) ? scopes : [];
+      log('Scopes приложения: ' + (scopesArr.join(', ') || '—'), 'muted');
+      if (!scopesArr.includes('booking')) {
+        log('⚠️ У приложения нет scope "booking" — Booking API будет недоступен', 'err');
       }
-
-      // Проверим, доступен ли сам метод
-      const ping = await pCall('booking.v1.resource.list', { select: ['id'], limit: 1 });
-      if (!ping.ok) {
-        log(`booking.v1.resource.list → ${ping.error} ${ping.description||''}`, 'err');
-      }
-    } catch(e) {
-      log('diagnoseAccess error: '+String(e), 'err');
+    } else {
+      log('app.info: ' + info.error + ' ' + (info.description||''), 'err');
     }
+
+    // Доп. проверка доступности Booking API
+    const ping = await pCall('booking.v1.service.list', { select: ['id'], limit: 1 });
+    if (!ping.ok) log(`booking.v1.service.list → ${ping.error} ${ping.description||''}`, 'err');
+  } catch(e) {
+    log('diagnoseAccess error: '+String(e), 'err');
   }
+}
 
   // ===== ЗАГРУЗКА РЕСУРСОВ ЧЕРЕЗ BOOKING API (С ПАГИНАЦИЕЙ) =====
   async function loadResources(){
@@ -144,12 +151,25 @@
       }
 
       listEl.innerHTML = '';
-      if (!items.length) {
-        listEl.textContent = 'Ресурсы не найдены (Booking API)';
-        log('booking.v1.resource.list вернул пусто. Проверь: включён ли модуль Онлайн-записи, созданы ли «Ресурсы» и «Услуги».', 'muted');
-        await diagnoseAccess();
-        return;
-      }
+        if (!items.length) {
+          listEl.textContent = 'Ресурсы не найдены (Booking API)';
+          log('booking.v1.resource.list вернул пусто.', 'muted');
+        
+          // Доп. подсказка: есть ли услуги?
+          try {
+            const svc = await pCall('booking.v1.service.list', { select: ['id','name'], limit: 5 });
+            if (svc.ok) {
+              const svcs = (svc.data?.items || svc.data || []);
+              if (!svcs.length) {
+                log('В Онлайн-записи пока нет УСЛУГ. Создай услугу и привяжи к ресурсу/расписанию.', 'err');
+              } else {
+                log(`Найдено услуг: ${svcs.length}. Но ресурсов нет — добавь хотя бы один ресурс.`, 'err');
+              }
+            }
+          } catch {}
+          await diagnoseAccess();
+          return;
+        }
       items.forEach(x => listEl.appendChild(mkRow(x)));
       preselect(); filter();
     } catch(e){
