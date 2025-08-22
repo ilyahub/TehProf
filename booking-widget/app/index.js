@@ -60,19 +60,38 @@ async function getEnv(){
 
 /* ---------- Booking loaders ---------- */
 async function loadResources(){
-  const items=[]; let page=1, iter=0;
-  while(iter++<50){
-    const r=await pCall('booking.v1.resource.list',{select:['id','name','status'],page});
-    if(!r.ok){ rowProbe('Resources','Ошибка',`${r.error||''} ${r.desc||''}`,'err'); break; }
-    const chunk=(r.data && (r.data.items||r.data)) || [];
-    if(Array.isArray(chunk)) items.push(...chunk);
-    const next=(r.data && (r.data.next??null));
-    if(!next || !chunk.length) break;
-    page=typeof next==='number'?next:page+1;
+  const items = [];
+  let page = 1, iter = 0, lastRaw = null;
+
+  while (iter++ < 50) {
+    const r = await pCall('booking.v1.resource.list', { select:['id','name','status'], page });
+    if (!r.ok) { rowProbe('Resources', 'Ошибка', `${r.error||''} ${r.desc||''}`, 'err'); break; }
+    lastRaw = r.data;
+    const chunk = (r.data && (r.data.items || r.data)) || [];
+    if (Array.isArray(chunk)) items.push(...chunk);
+    const next = (r.data && (r.data.next ?? null));
+    if (!next || !chunk.length) break;
+    page = typeof next === 'number' ? next : page + 1;
   }
-  rowProbe('Resources', String(items.length), items.length?'ОК':'Пусто', items.length?'ok':'warn');
+
+  rowProbe('Resources', String(items.length), items.length ? 'ОК' : 'Пусто', items.length ? 'ok' : 'warn');
+
+  // Отладочный дамп «как есть» — чтобы видеть структуру ответа портала
+  if (!items.length && lastRaw) {
+    log('DEBUG booking.v1.resource.list raw: ' + JSON.stringify(lastRaw).slice(0, 1000) + '…', 'muted');
+  }
+
+  // Fallback: собрать ID из бронирований
+  if (!items.length) {
+    const found = await discoverResourcesFromBookings();
+    if (found.length) {
+      rowProbe('Resources (по бронированиям)', String(found.length), 'Собрано из booking.list', 'warn');
+      return found;
+    }
+  }
   return items;
 }
+
 async function diagServices(){
   const r=await pCall('booking.v1.service.list',{select:['id','name','duration','active'],limit:100});
   if(r.ok){ const arr=(r.data?.items||r.data||[]); rowProbe('Services', String(arr.length), arr.length?'ОК':'Нет услуг', arr.length?'ok':'warn'); }
@@ -91,6 +110,32 @@ async function diagBookings(resourceIds){
   const r=await pCall('booking.v1.booking.list',{filter:{dateFrom:iso(from),dateTo:iso(to),resourceIds:resourceIds||[]},select:['id','status'],limit:100});
   if(r.ok){ const arr=(r.data?.items||r.data||[]); rowProbe('Bookings (−7..+30d)', String(arr.length), '', arr.length?'ok':'warn'); }
   else{ rowProbe('Bookings (−7..+30d)','Ошибка',`${r.error||''} ${r.desc||''}`,'err'); }
+}
+
+async function discoverResourcesFromBookings(){
+  const now = new Date();
+  const from = new Date(now.getTime() - 30*86400000);
+  const to   = new Date(now.getTime() + 1*86400000);
+  const iso = d => d.toISOString().slice(0,19) + '+00:00';
+
+  const r = await pCall('booking.v1.booking.list', {
+    filter: { dateFrom: iso(from), dateTo: iso(to) },
+    select: ['id','resourceIds'],
+    limit: 200
+  });
+
+  if (!r.ok) {
+    rowProbe('booking.list (discovery)', 'Ошибка', `${r.error||''} ${r.desc||''}`, 'err');
+    return [];
+  }
+
+  const arr = (r.data?.items || r.data || []);
+  const ids = new Set();
+  arr.forEach(b => (b.resourceIds||[]).forEach(x => ids.add(String(x))));
+
+  return Array.from(ids).map(id => ({
+    id, name: `Ресурс ${id} (из бронирований)`, status: 'unknown'
+  }));
 }
 
 /* ---------- Рендер + подписки ---------- */
@@ -112,22 +157,27 @@ function preselect(){
   });
 }
 function bind(){
-  const ids=selectedIds();
-  if(!ids.length){ alert('Выбери хотя бы один ресурс'); return; }
-  if(!validHandler(handlerEl.value)){ alert('Некорректный Handler URL'); return; }
+  const ids = selectedIds();
+  if (!validHandler(handlerEl.value)) { alert('Некорректный Handler URL'); return; }
 
-  BX24.callMethod('event.get',{},r=>{
-    if(!r.error || !r.error()) (r.data()||[]).filter(b=> sameBase(b.handler)).forEach(b=> BX24.callMethod('event.unbind',{event:b.event,handler:b.handler},()=>{}));
+  if (!ids.length) {
+    log('Подписка БЕЗ фильтра по ресурсам — все onBooking события пойдут в хендлер.', 'warn');
+  }
+
+  // снимаем прежние на этот handler
+  BX24.callMethod('event.get', {}, r=>{
+    if(!r.error || !r.error()) (r.data()||[]).filter(b=> sameBase(b.handler))
+      .forEach(b=> BX24.callMethod('event.unbind', { event:b.event, handler:b.handler }, ()=>{}));
   });
 
-  const u=new URL((handlerEl.value||'').trim());
-  u.searchParams.set('resources', ids.join(','));
-  const h=u.toString();
+  const u = new URL((handlerEl.value||'').trim());
+  if (ids.length) u.searchParams.set('resources', ids.join(','));
+  const h = u.toString();
 
   ['onBookingAdd','onBookingUpdate'].forEach(ev=>{
-    BX24.callMethod('event.bind',{event:ev,handler:h},res=>{
-      if(res.error && res.error()) log(`bind ${ev}: ${res.error()} / ${(res.error_description&&res.error_description())||''}`,'err');
-      else log(`OK bind ${ev} → ${h}`,'ok');
+    BX24.callMethod('event.bind', { event:ev, handler:h }, res=>{
+      if(res.error && res.error()) log(`bind ${ev}: ${res.error()} / ${(res.error_description&&res.error_description())||''}`, 'err');
+      else log(`OK bind ${ev} → ${h}`, 'ok');
     });
   });
 }
