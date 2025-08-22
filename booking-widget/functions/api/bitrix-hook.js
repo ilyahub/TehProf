@@ -89,18 +89,23 @@ export async function onRequestPost(ctx) {
       return new Response('already processed', { status: 200 });
     }
 
-    // 6) Вычисляем границы суток по дате начала (локальной)
+    // 6) Вычисляем границы суток (ALL‑DAY) по локальной дате начала
     const startStr = String(item.DATE_FROM || '').replace(' ', 'T');
     const d = startStr ? new Date(startStr) : new Date();
-    const yyyy = d.getFullYear(), mm = String(d.getMonth()+1).padStart(2,'0'), dd = String(d.getDate()).padStart(2,'0');
-    const DATE_FROM = `${yyyy}-${mm}-${dd} 00:00:00`;
-    const DATE_TO   = `${yyyy}-${mm}-${dd} 23:59:00`;
-
-    // 7) Обновляем событие
+    // Для однодневного all‑day у Битрикс: DATE_FROM / DATE_TO — даты БЕЗ времени + SKIP_TIME:'Y'
+    const yyyy = d.getFullYear();
+    const mm   = String(d.getMonth() + 1).padStart(2, '0');
+    const dd   = String(d.getDate()).padStart(2, '0');
+    const DATE_FROM = `${yyyy}-${mm}-${dd}`;
+    const DATE_TO   = `${yyyy}-${mm}-${dd}`;
+    
+    // 7) Обновляем событие как «целые сутки»
     const updR = await restPost('calendar.event.update.json', {
       id: eventId,
       fields: {
-        DATE_FROM, DATE_TO, SKIP_TIME: 'N',
+        DATE_FROM,
+        DATE_TO,
+        SKIP_TIME: 'Y', // ключевой флаг для all‑day
         DESCRIPTION: `${descr}\n#ALLDAY_SET`
       }
     });
