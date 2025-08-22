@@ -303,7 +303,10 @@
     ['onCalendarEventAdd','onCalendarEventUpdate'].forEach(ev=>{
       BX24.callMethod('event.bind', { event: ev, handler: h }, res=>{
         if(res.error()) log(`bind ${ev}: ${res.error()} / ${res.error_description()}`,'err');
-        else log(`OK bind ${ev} → ${h}`,'ok');
+        else {
+          const ids = idsFromHandler(h).join(',');
+          log(`OK bind ${ev} → handler set; sections=[${ids}] tz=${(tzEl.value||'').trim()||'Asia/Almaty'}`,'ok');
+        }
       });
     });
   }
