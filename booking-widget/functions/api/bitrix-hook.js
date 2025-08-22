@@ -72,10 +72,6 @@ export async function onRequestPost(ctx){
       return json({ok:true, skipped:true, reason:'resource not allowed', resourceIds:resIds, allowResources, tookMs:Date.now()-t0}, 200);
     }
 
-    // Здесь место для вашей бизнес-логики (CRM-связка, статусы, уведомления и т.д.)
-    // Пример: просто подтверждаем приём
-    return json({ ok:true, bookingId, eventType, resourceIds:resIds, status:booking.status||null, tookMs:Date.now()-t0 }, 200);
-
   }catch(e){
     return json({ ok:false, error:String(e) }, 500);
   }
