@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
-  <title>Booking Hook — выбор календарей</title>
+  <title>Booking Hook — ресурсы и подписка на onBooking*</title>
   <script src="https://api.bitrix24.com/api/v1/"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
@@ -21,12 +21,12 @@
   </style>
 </head>
 <body>
-  <h2>Бронирование ТС: выбор календарей и регистрация событий</h2>
-  <p class="muted">Отметьте календари <b>автомобилей</b> (ресурсы), для которых запись нужно автоматически «растягивать» до суток. Обычные встречи в CRM затрагиваться не будут.</p>
+  <h2>Онлайн‑запись: выбор <u>ресурсов</u> и регистрация событий onBooking*</h2>
+  <p class="muted">Отметьте <b>ресурсы</b> (автомобили), для которых обрабатываем бронирования. Без календарей.</p>
 
   <div class="card">
     <div class="row">
-      <input id="q" type="search" placeholder="Поиск по названию календаря…" />
+      <input id="q" type="search" placeholder="Поиск по названию ресурса…" />
       <button id="reload" class="btn">Обновить список</button>
     </div>
     <div id="list" class="list muted">Загрузка…</div>
@@ -34,16 +34,15 @@
   
   <div class="card">
     <div class="row">
-      <label>Таймзона портала (опционально):</label>
-      <input id="tz" type="text" placeholder="Asia/Almaty" value="Asia/Almaty" />
+      <label>Хендлер:</label>
+      <input id="handler" type="text" style="width:480px" value="https://booking-widget-d47.pages.dev/api/bitrix-hook" />
     </div>
     <div class="row" style="margin-top:10px">
-      <button id="bind" class="btn primary">Подписать события (Add/Update)</button>
+      <button id="bind" class="btn primary">Подписать onBookingAdd / onBookingUpdate</button>
       <button id="unbind" class="btn">Снять все подписки этого приложения</button>
     </div>
     <p class="muted" style="margin-top:8px">
-      Хендлер: <code>https://booking-widget-d47.pages.dev/api/bitrix-hook</code><br/>
-      Выбор будет передан в хендлер как <code>?sections=ID1,ID2&amp;tz=…</code>
+      В хендлер будет передан параметр <code>?resources=ID1,ID2</code>. Сами события — из модуля Онлайн‑записи. :contentReference[oaicite:3]{index=3}
     </p>
   </div>
 
@@ -53,21 +52,19 @@
   </div>
 
 <script>
-  const HANDLER_BASE = "https://booking-widget-d47.pages.dev/api/bitrix-hook";
   const logEl = document.getElementById('log');
   const listEl = document.getElementById('list');
   const qEl = document.getElementById('q');
-  const tzEl = document.getElementById('tz');
+  const handlerEl = document.getElementById('handler');
 
   function log(msg, cls){ const d=document.createElement('div'); if(cls) d.className=cls; d.textContent=msg; logEl.appendChild(d); }
-  function mkRow(s){
+  function mkRow(r){
     const lbl = document.createElement('label'); lbl.className="item";
-    const cb  = document.createElement('input'); cb.type="checkbox"; cb.value=String(s.ID||s.id);
-    const name= document.createElement('span'); name.textContent=s.NAME||s.name||'(без названия)';
-    const small=document.createElement('small');
-    small.textContent = `#${s.ID} • ${s.CAL_TYPE||s.type||''}${s.RESOURCE_TYPE?' • '+s.RESOURCE_TYPE:''}`;
+    const cb  = document.createElement('input'); cb.type="checkbox"; cb.value=String(r.id);
+    const name= document.createElement('span'); name.textContent=r.name || '(без названия)';
+    const small=document.createElement('small'); small.textContent = `#${r.id} • ${r.status||'active'}`;
     lbl.appendChild(cb); lbl.appendChild(name); lbl.appendChild(small);
-    lbl.dataset.name = (s.NAME||'').toLowerCase();
+    lbl.dataset.name = (r.name||'').toLowerCase();
     return lbl;
   }
   function filter(){ const q=qEl.value.trim().toLowerCase();
@@ -77,205 +74,33 @@
   }
   function selectedIds(){ return Array.from(listEl.querySelectorAll('input[type=checkbox]:checked')).map(x=>x.value); }
   function handlerUrl(ids){
-    const tz = encodeURIComponent((tzEl.value||'').trim()||'Asia/Almaty');
-    return `${HANDLER_BASE}?sections=${encodeURIComponent(ids.join(','))}&tz=${tz}`;
+    const base = (handlerEl.value||'').trim();
+    const u = new URL(base);
+    u.searchParams.set('resources', ids.join(','));
+    return u.toString();
   }
-  function sameBase(h){ try{const u=new URL(h); return (u.origin+u.pathname)===HANDLER_BASE;}catch{return false;} }
-  function idsFromHandler(h){ try{const u=new URL(h); return (u.searchParams.get('sections')||'').split(',').filter(Boolean);}catch{return [];} }
+  function sameBase(h){ try{const u=new URL(h); const b=new URL(handlerEl.value); return (u.origin+u.pathname)===(b.origin+b.pathname);}catch{return false;} }
+  function idsFromHandler(h){ try{const u=new URL(h); return (u.searchParams.get('resources')||'').split(',').filter(Boolean);}catch{return [];} }
 
- // ---------- Promise-обёртки над BX24 ----------
   const pCall  = (method, params={}) => new Promise(res => BX24.callMethod(method, params, r => res(r)));
-  const pBatch = (cmds)               => new Promise(res => BX24.callBatch(cmds, res));
 
- async function discoverResourceSections() {
-    const rows = [];
-
-    // 0) Если внезапно появится «родной» список ресурсов — используем его
-    const resourceListVariants = ['calendar.resource.list','calendar.resource.getlist','calendar.resource.getList'];
-    for (const m of resourceListVariants) {
-      const r = await pCall(m, {});
-      if (!r.error && typeof r.data === 'function') {
-        const data = r.data() || [];
-        if (Array.isArray(data) && data.length) {
-          // для каждого ресурса забираем секции владельца (и верхний, и нижний регистр параметров)
-          for (const item of data) {
-            const ownerId = item.ID || item.OWNER_ID || item.RESOURCE_ID || item.id;
-            if (!ownerId) continue;
-            const tries = [
-              { TYPE: 'resource', OWNER_ID: ownerId },
-              { type: 'resource', ownerId: ownerId }
-            ];
-            let got = [];
-            for (const p of tries) {
-              const s = await pCall('calendar.section.get', p);
-              if (!s.error && typeof s.data === 'function' && s.data().length) { got = s.data(); break; }
-            }
-            got.forEach(sec => {
-              if (!sec.NAME && item.NAME) sec.NAME = item.NAME;
-              rows.push(sec);
-            });
-          }
-          if (rows.length) return rows;
-        }
-      }
-    }
-
-    // 1) Достаём события и собираем SECTION_ID (главный обходной путь)
-    log('Метод списка ресурсов недоступен — получаю секции по событиям…', 'muted');
-
-    // диапазон: чуть назад и вперёд, чтобы захватить расписание
-    const from = new Date(); from.setDate(from.getDate() - 7);
-    const to   = new Date(); to.setDate(to.getDate() + 60);
-
-    const fmt = d => d.toISOString().slice(0,19).replace('T',' '); // YYYY-MM-DD HH:MM:SS
-    const params = {
-      from: fmt(from),
-      to:   fmt(to),
-      // type/ownerId здесь НЕ задаём: нам нужны любые события, главное — SECTION_ID
-    };
-
-    // забираем события порциями батчем (по дням), чтобы не упереться в лимиты
-    const dayCount = Math.ceil((to - from) / 86400000);
-    const ids = new Set();
-
-    // по 20 дней в одном батче
-    for (let i = 0; i < dayCount; i += 20) {
-      const b = {};
-      for (let d = 0; d < 20 && (i + d) < dayCount; d++) {
-        const d1 = new Date(from); d1.setDate(from.getDate() + i + d);
-        const d2 = new Date(d1);  d2.setDate(d1.getDate() + 1);
-        b['E'+(i+d)] = ['calendar.event.get', { from: fmt(d1), to: fmt(d2) }];
-      }
-      const ans = await pBatch(b);
-      for (const k in ans) {
-        const item = ans[k];
-        if (item && item.answer && Array.isArray(item.answer.result)) {
-          for (const ev of item.answer.result) {
-            const sid = String(ev.SECTION_ID ?? ev.sectionId ?? '').trim();
-            if (sid) ids.add(sid);
-          }
-        }
-      }
-    }
-
-    if (!ids.size) {
-      // ничего не нашли по событиям
-      return [];
-    }
-
-    // 2) По найденным id подтягиваем сами секции (несколько вариантов методов на случай различий)
-    const sectionByIdVariants = [
-      id => pCall('calendar.section.getbyid', { id }),
-      id => pCall('calendar.section.getById', { id }),
-      id => pCall('calendar.section.get',    { ID: id }),
-      id => pCall('calendar.section.get',    { id: id }),
-    ];
-
-    const seen = new Set();
-    for (const sid of ids) {
-      let sec = null;
-      for (const getter of sectionByIdVariants) {
-        const r = await getter(sid);
-        if (!r || r.error) continue;
-        const data = typeof r.data === 'function' ? r.data() : r.result;
-        if (!data) continue;
-        // одни методы возвращают объект, другие — массив из одной секции
-        sec = Array.isArray(data) ? (data[0] || null) : data;
-        if (sec) break;
-      }
-      if (sec) {
-        const id = String(sec.ID || sec.id || '');
-        if (!id || seen.has(id)) continue;
-        seen.add(id);
-        // Нормализуем название (иногда пустое) — хотя бы #ID
-        if (!sec.NAME && !sec.name) sec.NAME = `#${id}`;
-        rows.push(sec);
-      }
-    }
-
-    return rows;
-  }
-
-  async function scanByOwnerId(out, seen) {
-    const MAX_OWNER = 200000; // было 3000 — увеличили, чтобы достать «высокие» ID
-    const STEP = 25;
-    let found = 0, miss = 0;
-
-    for (let start = 1; start <= MAX_OWNER; start += STEP) {
-      const batch = {};
-      for (let id = start; id < start + STEP; id++) {
-        batch['U'+id] = ['calendar.section.get', { TYPE:'resource', OWNER_ID:id }];
-        batch['L'+id] = ['calendar.section.get', { type:'resource', ownerId:id }];
-      }
-      const ans = await pBatch(batch);
-
-      let hits = 0;
-      for (const k in ans) {
-        const a = ans[k];
-        const res = a && a.answer && Array.isArray(a.answer.result) ? a.answer.result : [];
-        res.forEach(sec => {
-          const sid = String(sec.ID || sec.id || '');
-          if (!sid || seen.has(sid)) return;
-          seen.add(sid);
-          out.push(sec);
-          hits++;
-        });
-      }
-      if (hits) { found += hits; miss = 0; } else { miss += STEP; }
-
-      // как только что‑то нашли и пошла длинная серия промахов — выходим,
-      // чтобы не гонять пустые батчи бесконечно
-      if (found > 0 && miss >= 1000) break;
-    }
-  }
-
-  async function scanBySectionId(out, seen) {
-    const MAX_ID = 300000; // при необходимости можно поднять
-    const STEP   = 25;
-    let found = 0, miss = 0;
-
-    for (let start = 1; start <= MAX_ID; start += STEP) {
-      const batch = {};
-      for (let id = start; id < start + STEP; id++) {
-        batch['I'+id] = ['calendar.section.get', { id }];
-      }
-      const ans = await pBatch(batch);
-
-      let hits = 0;
-      for (const k in ans) {
-        const a = ans[k];
-        const res = a && a.answer && Array.isArray(a.answer.result) ? a.answer.result : [];
-        res.forEach(sec => {
-          const sid = String(sec.ID || sec.id || '');
-          // интересуют только ресурсные секции
-          const calType = String(sec.CAL_TYPE || sec.type || '').toLowerCase();
-          if (!sid || seen.has(sid) || calType !== 'resource') return;
-          seen.add(sid);
-          out.push(sec);
-          hits++;
-        });
-      }
-      if (hits) { found += hits; miss = 0; } else { miss += STEP; }
-      if (found > 0 && miss >= 1500) break;
-    }
-  }
-  // <<<<<<<<<<<<<<<<<<<< КОНЕЦ ЗАМЕНЫ <<<<<<<<<<<<<<<<<<<<
-
-  async function loadSections(){
-    listEl.classList.add('muted');
-    listEl.textContent = 'Загрузка…';
+  async function loadResources(){
+    listEl.classList.add('muted'); listEl.textContent = 'Загрузка…';
     try {
-      const sections = await discoverResourceSections();
+      // Booking API: список ресурсов
+      const r = await pCall('booking.v1.resource.list', { select: ['id','name','status'] });
+      const data = r && typeof r.data==='function' ? r.data() : (r && r.result);
+      const items = data?.items || data || [];
       listEl.innerHTML = '';
-      if (!sections.length) {
-        listEl.textContent = 'Календари ресурсов не найдены';
-      } else {
-        sections.forEach(s => listEl.appendChild(mkRow(s)));
-        preselect(); filter();
+      if (!Array.isArray(items) || !items.length) {
+        listEl.textContent = 'Ресурсы не найдены (Booking API)';
+        return;
       }
-    } catch (e) {
-      log(String(e), 'err');
-      listEl.textContent = 'Ошибка загрузки';
+      items.forEach(x => listEl.appendChild(mkRow(x)));
+      preselect(); filter();
+    } catch(e){
+      listEl.textContent = 'Ошибка загрузки ресурсов';
+      log(String(e),'err');
     } finally {
       listEl.classList.remove('muted');
     }
@@ -294,19 +119,19 @@
 
   function bind(){
     const ids = selectedIds();
-    if(!ids.length){ alert('Выберите хотя бы один календарь-ресурс автомобиля'); return; }
-    // снимаем наши старые подписки (чтоб не плодить)
+    if(!ids.length){ alert('Выберите хотя бы один ресурс'); return; }
+
+    // снимаем наши старые подписки на этот же handler
     BX24.callMethod('event.get', {}, r=>{
       if(!r.error()) r.data().filter(b=> sameBase(b.handler)).forEach(b=> BX24.callMethod('event.unbind',{event:b.event,handler:b.handler},()=>{}));
     });
+
     const h = handlerUrl(ids);
-    ['onCalendarEventAdd','onCalendarEventUpdate'].forEach(ev=>{
+    // Подписываем именно на события модуля бронирования
+    ['onBookingAdd','onBookingUpdate'].forEach(ev=>{
       BX24.callMethod('event.bind', { event: ev, handler: h }, res=>{
         if(res.error()) log(`bind ${ev}: ${res.error()} / ${res.error_description()}`,'err');
-        else {
-          const ids = idsFromHandler(h).join(',');
-          log(`OK bind ${ev} → handler set; sections=[${ids}] tz=${(tzEl.value||'').trim()||'Asia/Almaty'}`,'ok');
-        }
+        else log(`OK bind ${ev} → ${h}`,'ok');
       });
     });
   }
@@ -325,10 +150,10 @@
 
   document.getElementById('bind').onclick = bind;
   document.getElementById('unbind').onclick = unbind;
-  document.getElementById('reload').onclick = loadSections;
+  document.getElementById('reload').onclick = loadResources;
   document.getElementById('q').oninput = filter;
 
-  BX24.init(()=>{ log('BX24 инициализировано. Загружаю календари…','muted'); loadSections(); });
+  BX24.init(()=>{ log('BX24 инициализировано. Загружаю ресурсы (Booking API)…','muted'); loadResources(); });
 </script>
 
 </body>
