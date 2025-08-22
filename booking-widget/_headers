@@ -1,2 +1,6 @@
 /app/*
   Content-Security-Policy: frame-ancestors https://tehprof.bitrix24.kz https://*.bitrix24.kz https://*.bitrix24.com;
+
+/booking-widget/app/*
+  Content-Security-Policy: default-src 'self'; img-src * data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' https://api.bitrix24.com; connect-src https:; frame-ancestors https://*.bitrix24.* https://*.bitrix24.ru https://*.bitrix24.kz https://*.bitrix24.ua;
+  X-Content-Type-Options: nosniff
