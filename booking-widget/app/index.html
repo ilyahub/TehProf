@@ -2,239 +2,383 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
-  <title>Booking Hook — ресурсы и подписка на onBooking*</title>
-  <script src="https://api.bitrix24.com/api/v1/"></script>
+  <title>Booking Hook — ресурсы/календарь с автодиагностикой</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://api.bitrix24.com/api/v1/"></script>
   <style>
-    body{font-family:system-ui,Arial,sans-serif;margin:24px;max-width:960px}
+    :root { --fg:#111827; --muted:#6b7280; --ok:#059669; --warn:#d97706; --err:#b91c1c; --bd:#e5e7eb; }
+    body{font-family:system-ui,Arial,sans-serif;margin:24px;max-width:1080px;color:var(--fg)}
     .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-    .card{border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin:12px 0}
-    .muted{color:#6b7280}
-    .list{max-height:380px;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;padding:8px}
-    .btn{padding:10px 16px;border-radius:10px;border:1px solid #111827;cursor:pointer}
-    .btn.primary{background:#111827;color:#fff}
-    .ok{color:#059669} .err{color:#b91c1c}
-    input[type="search"]{padding:8px 12px;width:320px;border:1px solid #e5e7eb;border-radius:10px}
+    .card{border:1px solid var(--bd);border-radius:12px;padding:16px;margin:12px 0}
+    .muted{color:var(--muted)}
+    .list{max-height:420px;overflow:auto;border:1px solid var(--bd);border-radius:10px;padding:8px}
+    .btn{padding:10px 16px;border-radius:10px;border:1px solid var(--fg);cursor:pointer;background:#fff}
+    .btn.primary{background:var(--fg);color:#fff}
+    .ok{color:var(--ok)} .warn{color:var(--warn)} .err{color:var(--err)}
+    input[type="search"],input[type="text"]{padding:8px 12px;border:1px solid var(--bd);border-radius:10px}
+    input[type="text"]{width:520px}
     label.item{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:8px}
     label.item:hover{background:#f9fafb}
-    small{color:#6b7280}
+    small{color:var(--muted)}
+    code{background:#f8fafc;padding:2px 6px;border-radius:6px;border:1px solid var(--bd)}
+    .pill{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid var(--bd);font-size:12px}
+    .kbd{font-family:ui-monospace,Menlo,Consolas,monospace}
+    .hr{height:1px;background:var(--bd);margin:12px 0}
   </style>
 </head>
 <body>
-  <h2>Онлайн‑запись: выбор <u>ресурсов</u> и регистрация событий onBooking*</h2>
-  <p class="muted">Отметьте <b>ресурсы</b> (автомобили), для которых обрабатываем бронирования. Без календарей.</p>
+  <h2>Онлайн-запись: выбор <u>ресурсов</u>/<u>календарей</u> и регистрация событий</h2>
+  <p class="muted">Работаем через Booking API, если доступен. Если модуль/скоупа нет — автоматически переключаемся на Calendar (секции ресурсов). Все проверки и подсказки выводятся ниже.</p>
 
   <div class="card">
-    <div class="row">
-      <input id="q" type="search" placeholder="Поиск по названию ресурса…" />
+    <div class="row" style="gap:16px">
+      <input id="q" type="search" placeholder="Поиск по названию…" />
       <button id="reload" class="btn">Обновить список</button>
+      <span id="mode-tag" class="pill muted">режим: неизвестно</span>
     </div>
     <div id="list" class="list muted">Загрузка…</div>
   </div>
-  
+
   <div class="card">
     <div class="row">
-      <label>Хендлер:</label>
-      <input id="handler" type="text" style="width:480px" value="https://booking-widget-d47.pages.dev/api/bitrix-hook" />
+      <label>Хендлер (Cloudflare):</label>
+      <input id="handler" type="text" value="https://booking-widget-d47.pages.dev/api/bitrix-hook" />
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label>TZ:</label>
+      <input id="tz" type="text" value="Asia/Almaty" style="width:220px"/>
+      <span class="muted">Пример: <span class="kbd">Asia/Almaty</span>, <span class="kbd">Europe/Moscow</span></span>
     </div>
     <div class="row" style="margin-top:10px">
-      <button id="bind" class="btn primary">Подписать onBookingAdd / onBookingUpdate</button>
-      <button id="unbind" class="btn">Снять все подписки этого приложения</button>
+      <button id="bind" class="btn primary">Подписать</button>
+      <button id="unbind" class="btn">Снять все подписки</button>
+      <button id="selftest" class="btn">Самотест</button>
     </div>
     <p class="muted" style="margin-top:8px">
-      В хендлер будет передан параметр <code>?resources=ID1,ID2</code>. Сами события — из модуля Онлайн‑записи. :contentReference[oaicite:3]{index=3}
+      Если режим <b>Booking</b> — в хендлер пойдёт <code>?resources=ID1,ID2</code>. Если режим <b>Calendar</b> — <code>?sections=ID1,ID2&amp;tz=…</code>
     </p>
   </div>
 
   <div class="card">
     <b>Статус</b>
-    <pre id="log" style="white-space:pre-wrap"></pre>
+    <div class="hr"></div>
+    <pre id="log" style="white-space:pre-wrap;margin:0"></pre>
   </div>
 
 <script>
-  // ===== УТИЛИТЫ UI =====
-  const logEl = document.getElementById('log');
-  const listEl = document.getElementById('list');
-  const qEl = document.getElementById('q');
-  const handlerEl = document.getElementById('handler');
+/* ====================== УТИЛИТЫ UI ====================== */
+const logEl = document.getElementById('log');
+const listEl = document.getElementById('list');
+const qEl = document.getElementById('q');
+const tzEl = document.getElementById('tz');
+const handlerEl = document.getElementById('handler');
+const modeTag = document.getElementById('mode-tag');
 
-  function log(msg, cls){ const d=document.createElement('div'); if(cls) d.className=cls; d.textContent=msg; logEl.appendChild(d); }
-  function mkRow(r){
-    const lbl = document.createElement('label'); lbl.className="item";
-    const cb  = document.createElement('input'); cb.type="checkbox"; cb.value=String(r.id);
-    const name= document.createElement('span'); name.textContent=r.name || '(без названия)';
-    const small=document.createElement('small'); small.textContent = `#${r.id} • ${r.status||'active'}`;
-    lbl.appendChild(cb); lbl.appendChild(name); lbl.appendChild(small);
-    lbl.dataset.name = (r.name||'').toLowerCase();
-    return lbl;
-  }
-  function filter(){ const q=qEl.value.trim().toLowerCase();
-    Array.from(listEl.querySelectorAll('label.item')).forEach(el=>{
-      el.style.display = !q || el.dataset.name.includes(q) ? '' : 'none';
-    });
-  }
-  function selectedIds(){ return Array.from(listEl.querySelectorAll('input[type=checkbox]:checked')).map(x=>x.value); }
-  function handlerUrl(ids){
-    const base = (handlerEl.value||'').trim();
-    const u = new URL(base);
-    u.searchParams.set('resources', ids.join(','));
-    return u.toString();
-  }
-  function sameBase(h){ try{const u=new URL(h); const b=new URL(handlerEl.value); return (u.origin+u.pathname)===(b.origin+b.pathname);}catch{return false;} }
-  function idsFromHandler(h){ try{const u=new URL(h); return (u.searchParams.get('resources')||'').split(',').filter(Boolean);}catch{return [];} }
+function log(msg, cls){ const d=document.createElement('div'); if(cls) d.className=cls; d.textContent=msg; logEl.appendChild(d); }
+function kv(obj){ try{return JSON.stringify(obj,null,2)}catch{return String(obj)} }
+function setMode(m){ modeTag.textContent='режим: '+m; modeTag.className='pill '+(m==='Booking'?'ok':(m==='Calendar'?'warn':'muted')); }
 
-  // ===== ОБЁРТКА НАД BX24 С ЯВНЫМИ ОШИБКАМИ =====
-  const pCall  = (method, params={}) => new Promise(resolve => {
-    BX24.callMethod(method, params, r => {
+/* ====================== ВАЛИДАЦИЯ ВВОДА ====================== */
+function validTz(t){ return /^[A-Za-z_]+\/[A-Za-z_]+$/.test((t||'').trim()); }
+function validHandler(u){
+  try{
+    const url = new URL((u||'').trim());
+    if(!/^https:$/i.test(url.protocol)) return {ok:false,reason:'handler не https'};
+    if(!url.hostname.includes('pages.dev') && !url.hostname.includes('workers.dev')) return {ok:true,reason:'ok (внешний домен)'};
+    return {ok:true,reason:'ok'};
+  }catch{ return {ok:false,reason:'некорректный URL'}; }
+}
+
+/* ====================== BX24 ОБЁРТКИ ====================== */
+const pCall = (method, params={}) => new Promise(res=>{
+  try {
+    BX24.callMethod(method, params, r=>{
       try {
         if (r && typeof r.error === 'function' && r.error()) {
-          resolve({ ok:false, error:r.error(), description: (r.error_description && r.error_description()) || '' , raw:r });
+          res({ok:false, error:r.error(), desc:(r.error_description&&r.error_description())||'', raw:r});
         } else {
-          const data = r && typeof r.data==='function' ? r.data() : null;
-          resolve({ ok:true, data, raw:r });
+          res({ok:true, data:(r&&r.data&&r.data())||null, raw:r});
         }
-      } catch(e) { resolve({ ok:false, error:String(e) }); }
+      } catch(e){ res({ok:false,error:String(e)}); }
     });
-  });
+  } catch(e){ res({ok:false,error:String(e)}); }
+});
 
-  // ===== ДИАГНОСТИКА ДОСТУПА (ПОКАЖЕТ SCOPES И ОШИБКИ) =====
-async function diagnoseAccess() {
-  try {
-    const info = await pCall('app.info', {});
-    if (info.ok) {
-      const d = info.data || {};
-      // Разные варианты структуры ответа Bitrix
-      const scopes =
-        d.scope || d.SCOPE ||
-        (d.result && (d.result.scope || d.result.SCOPE)) ||
-        (d.info && (d.info.scope || d.info.SCOPE)) ||
-        [];
-      const scopesArr = Array.isArray(scopes) ? scopes : [];
-      log('Scopes приложения: ' + (scopesArr.join(', ') || '—'), 'muted');
-      if (!scopesArr.includes('booking')) {
-        log('⚠️ У приложения нет scope "booking" — Booking API будет недоступен', 'err');
+const pBatch = (cmds) => new Promise(res=>{
+  try { BX24.callBatch(cmds, res); } catch(e){ res(null); }
+});
+
+/* ====================== РЕЖИМ РАБОТЫ (BOOKING vs CALENDAR) ====================== */
+async function getScopes(){
+  const info = await pCall('app.info', {});
+  if(!info.ok) return [];
+  const d = info.data || {};
+  const scopes = d.scope || d.SCOPE || (d.result && d.result.scope) || (d.info && d.info.scope) || [];
+  return Array.isArray(scopes) ? scopes : [];
+}
+
+async function detectMode(){
+  // 1) Пробуем booking.ping — через существующий метод (service.list может отсутствовать)
+  const t = await pCall('booking.v1.resource.list', { select: ['id'], limit:1 });
+  if (t.ok && t.data && (Array.isArray(t.data.items||t.data) ? (t.data.items||t.data).length>=0 : true)) {
+    log('Booking API доступен.', 'ok'); return 'Booking';
+  }
+  if (!t.ok){
+    const e = (t.error||'').toLowerCase();
+    if (e.includes('insufficient_scope') || e.includes('access_denied')) log('Нет прав booking — переключаюсь на Calendar.', 'warn');
+    else if (e.includes('method_not_found')) log('На портале нет booking.v1.* — переключаюсь на Calendar.', 'warn');
+    else log('Booking API недоступен: '+t.error+' '+(t.desc||''), 'warn');
+  }
+  return 'Calendar';
+}
+
+/* ====================== ЗАГРУЗКА СПИСКА (ОБА РЕЖИМА) ====================== */
+function mkRow(s){
+  const lbl = document.createElement('label'); lbl.className='item';
+  const cb = document.createElement('input'); cb.type='checkbox'; cb.value=String(s.id||s.ID);
+  const name=document.createElement('span'); name.textContent=s.name||s.NAME||'(без названия)';
+  const small=document.createElement('small');
+  small.textContent = s.status?`#${s.id} • ${s.status}`:(`#${s.ID} • ${(s.CAL_TYPE||s.type||'').toLowerCase()}${s.RESOURCE_TYPE?' • '+s.RESOURCE_TYPE:''}`);
+  lbl.appendChild(cb); lbl.appendChild(name); lbl.appendChild(small);
+  lbl.dataset.name = (s.name||s.NAME||'').toLowerCase();
+  return lbl;
+}
+
+function filter(){ const q=qEl.value.trim().toLowerCase();
+  Array.from(listEl.querySelectorAll('label.item')).forEach(el=>{
+    el.style.display = !q || el.dataset.name.includes(q) ? '' : 'none';
+  });
+}
+
+async function loadBookingResources(){
+  const items = [];
+  let page = 1, more = true, guard = 0;
+  while(more && guard++<50){
+    const r = await pCall('booking.v1.resource.list', { select:['id','name','status'], page });
+    if(!r.ok){ log(`booking.v1.resource.list(${page}) → ${r.error} ${r.desc||''}`, 'err'); break; }
+    const chunk = (r.data && (r.data.items||r.data)) || [];
+    if(Array.isArray(chunk)) items.push(...chunk);
+    const next = (r.data && (r.data.next ?? null));
+    more = !!next && chunk.length>0;
+    page = typeof next==='number' ? next : page+1;
+  }
+  return items;
+}
+
+async function discoverCalendarSections(){
+  const rows = [];
+
+  // быстрый путь: calendar.resource.list (если есть)
+  const variants = ['calendar.resource.list','calendar.resource.getlist','calendar.resource.getList'];
+  for(const m of variants){
+    const r = await pCall(m,{});
+    if(r.ok && Array.isArray(r.data) && r.data.length){
+      for(const item of r.data){
+        const ownerId = item.ID || item.OWNER_ID || item.RESOURCE_ID || item.id;
+        if(!ownerId) continue;
+        for(const p of [{TYPE:'resource',OWNER_ID:ownerId},{type:'resource',ownerId}]){
+          const s = await pCall('calendar.section.get', p);
+          if(s.ok && Array.isArray(s.data) && s.data.length){
+            s.data.forEach(sec=>{ if(!sec.NAME && item.NAME) sec.NAME=item.NAME; rows.push(sec); });
+            break;
+          }
+        }
       }
+      if(rows.length) return rows;
+    }
+  }
+
+  log('Метод списка ресурсов недоступен — собираю секции по событиям…','muted');
+  // диапазон (-7; +60 дней)
+  const from = new Date(); from.setDate(from.getDate()-7);
+  const to = new Date(); to.setDate(to.getDate()+60);
+  const fmt = d => d.toISOString().slice(0,19).replace('T',' ');
+
+  const dayCount = Math.ceil((to - from)/86400000);
+  const ids = new Set();
+
+  for(let i=0;i<dayCount;i+=20){
+    const b={};
+    for(let d=0;d<20 && (i+d)<dayCount;d++){
+      const d1=new Date(from); d1.setDate(from.getDate()+i+d);
+      const d2=new Date(d1); d2.setDate(d1.getDate()+1);
+      b['E'+(i+d)]=['calendar.event.get',{from:fmt(d1),to:fmt(d2)}];
+    }
+    const ans = await pBatch(b)||{};
+    for(const k in ans){
+      const a = ans[k];
+      const arr = a && a.answer && Array.isArray(a.answer.result) ? a.answer.result : [];
+      for(const ev of arr){ const sid=String(ev.SECTION_ID??ev.sectionId??'').trim(); if(sid) ids.add(sid); }
+    }
+  }
+  if(!ids.size) return [];
+
+  // подтянем секции по id (несколько вариантов методов)
+  const seen = new Set();
+  const getSecById = async (id)=>{
+    for(const m of [
+      ['calendar.section.getbyid',{id}],
+      ['calendar.section.getById',{id}],
+      ['calendar.section.get',{ID:id}],
+      ['calendar.section.get',{id}],
+    ]){
+      const r = await pCall(m[0], m[1]); if(!r || !r.ok) continue;
+      const data = Array.isArray(r.data) ? r.data[0] : r.data;
+      if(data) return data;
+    }
+    return null;
+  };
+  for(const sid of ids){
+    const s = await getSecById(sid);
+    const id = String(s?.ID||s?.id||'');
+    const type = String(s?.CAL_TYPE||s?.type||'').toLowerCase();
+    if(id && !seen.has(id) && type==='resource'){ seen.add(id); rows.push(s); }
+  }
+  return rows;
+}
+
+async function loadList(){
+  listEl.classList.add('muted'); listEl.textContent='Загрузка…';
+  try{
+    const scopes = await getScopes();
+    log('Scopes: '+(scopes.join(', ')||'—'),'muted');
+
+    const mode = await detectMode();
+    setMode(mode);
+
+    let items = [];
+    if(mode==='Booking'){
+      items = await loadBookingResources();
+      if(!items.length) log('Booking вернул пусто. Проверь: созданы ли Ресурсы/Услуги в Онлайн-записи.','warn');
     } else {
-      log('app.info: ' + info.error + ' ' + (info.description||''), 'err');
+      items = await discoverCalendarSections();
+      if(!items.length) log('Calendar: не нашёл секции ресурсов. Создай ресурсы или добавь события.','warn');
     }
 
-    // Доп. проверка доступности Booking API
-    const ping = await pCall('booking.v1.service.list', { select: ['id'], limit: 1 });
-    if (!ping.ok) log(`booking.v1.service.list → ${ping.error} ${ping.description||''}`, 'err');
-  } catch(e) {
-    log('diagnoseAccess error: '+String(e), 'err');
+    listEl.innerHTML='';
+    if(!items.length){ listEl.textContent = mode==='Booking' ? 'Ресурсы не найдены (Booking)' : 'Календари ресурсов не найдены (Calendar)'; }
+    else { items.forEach(x=> listEl.appendChild(mkRow(x))); preselect(); filter(); }
+
+  }catch(e){
+    listEl.textContent='Ошибка загрузки';
+    log('loadList error: '+String(e), 'err');
+  }finally{
+    listEl.classList.remove('muted');
   }
 }
 
-  // ===== ЗАГРУЗКА РЕСУРСОВ ЧЕРЕЗ BOOKING API (С ПАГИНАЦИЕЙ) =====
-  async function loadResources(){
-    listEl.classList.add('muted'); listEl.textContent = 'Загрузка…';
-    try {
-      const items = [];
-      let page = 1, more = true;
+/* ====================== ПОДПИСКИ ====================== */
+function sameBase(h){ try{const u=new URL(h); const b=new URL(handlerEl.value); return (u.origin+u.pathname)===(b.origin+b.pathname);}catch{return false;} }
+function idsFromHandler(h,key){ try{const u=new URL(h); return (u.searchParams.get(key)||'').split(',').filter(Boolean);}catch{return [];} }
+function selectedIds(){ return Array.from(listEl.querySelectorAll('input[type=checkbox]:checked')).map(x=>x.value); }
 
-      while (more) {
-        const resp = await pCall('booking.v1.resource.list', { select: ['id','name','status'], page });
-        if (!resp.ok) {
-          listEl.textContent = `Ошибка: ${resp.error} ${resp.description||''}`;
-          log(`booking.v1.resource.list(page=${page}) → ${resp.error} ${resp.description||''}`, 'err');
-          await diagnoseAccess();
-          return;
-        }
-        // Возможны два формата: {items, next} ИЛИ массив
-        const chunk = (resp.data && (resp.data.items || resp.data)) || [];
-        if (Array.isArray(chunk)) items.push(...chunk);
-        // next может быть true/false, номер, либо отсутствовать
-        const next = resp.data && (resp.data.next ?? null);
-        if (next === null || next === undefined || next === false || chunk.length === 0) { more = false; }
-        else { page = (typeof next === 'number' ? next : page + 1); }
-      }
-
-      listEl.innerHTML = '';
-        if (!items.length) {
-          listEl.textContent = 'Ресурсы не найдены (Booking API)';
-          log('booking.v1.resource.list вернул пусто.', 'muted');
-        
-          // Доп. подсказка: есть ли услуги?
-          try {
-            const svc = await pCall('booking.v1.service.list', { select: ['id','name'], limit: 5 });
-            if (svc.ok) {
-              const svcs = (svc.data?.items || svc.data || []);
-              if (!svcs.length) {
-                log('В Онлайн-записи пока нет УСЛУГ. Создай услугу и привяжи к ресурсу/расписанию.', 'err');
-              } else {
-                log(`Найдено услуг: ${svcs.length}. Но ресурсов нет — добавь хотя бы один ресурс.`, 'err');
-              }
-            }
-          } catch {}
-          await diagnoseAccess();
-          return;
-        }
-      items.forEach(x => listEl.appendChild(mkRow(x)));
-      preselect(); filter();
-    } catch(e){
-      listEl.textContent = 'Ошибка загрузки ресурсов';
-      log(String(e),'err');
-      await diagnoseAccess();
-    } finally {
-      listEl.classList.remove('muted');
-    }
-  }
-
-  // ===== ПРЕДЗАПОЛНЕНИЕ ЧЕКБОКСОВ ПО АКТИВНЫМ ПОДПИСКАМ =====
-  function preselect(){
-    BX24.callMethod('event.get', {}, r=>{
-      if(r.error && r.error()) return;
-      const data = r.data ? r.data() : [];
-      const binds = data.filter(b=> sameBase(b.handler));
-      if(!binds.length){ log('Наших подписок пока нет.','muted'); return; }
-      const ids = new Set(); binds.forEach(b=> idsFromHandler(b.handler).forEach(x=>ids.add(x)));
-      listEl.querySelectorAll('input[type=checkbox]').forEach(cb=>{ if(ids.has(cb.value)) cb.checked=true; });
-      log(`Найдены активные подписки: ${Array.from(ids).join(',')||'—'}`);
+function preselect(){
+  BX24.callMethod('event.get', {}, r=>{
+    if(r.error && r.error()) return;
+    const binds = (r.data&&r.data())||[];
+    const mine = binds.filter(b=> sameBase(b.handler));
+    if(!mine.length){ log('Наших подписок пока нет.','muted'); return; }
+    // отмечаем чекбоксы из первого подходящего бинда
+    const ids = new Set(); mine.forEach(b=>{
+      idsFromHandler(b.handler,'resources').forEach(x=>ids.add(x));
+      idsFromHandler(b.handler,'sections').forEach(x=>ids.add(x));
     });
-  }
-
-  // ===== УПРАВЛЕНИЕ ПОДПИСКАМИ НА onBooking* =====
-  function bind(){
-    const ids = selectedIds();
-    if(!ids.length){ alert('Выберите хотя бы один ресурс'); return; }
-
-    // снимаем наши старые подписки на этот же handler
-    BX24.callMethod('event.get', {}, r=>{
-      if(!r.error || !r.error()) (r.data()||[]).filter(b=> sameBase(b.handler)).forEach(b=> BX24.callMethod('event.unbind',{event:b.event,handler:b.handler},()=>{}));
-    });
-
-    const h = handlerUrl(ids);
-    ['onBookingAdd','onBookingUpdate'].forEach(ev=>{
-      BX24.callMethod('event.bind', { event: ev, handler: h }, res=>{
-        if(res.error && res.error()) log(`bind ${ev}: ${res.error()} / ${(res.error_description && res.error_description())||''}`,'err');
-        else log(`OK bind ${ev} → ${h}`,'ok');
-      });
-    });
-  }
-
-  function unbind(){
-    BX24.callMethod('event.get', {}, r=>{
-      if(r.error && r.error()){ log(`event.get: ${r.error()} / ${(r.error_description && r.error_description())||''}`,'err'); return; }
-      (r.data()||[]).filter(b=> sameBase(b.handler)).forEach(b=>{
-        BX24.callMethod('event.unbind',{event:b.event,handler:b.handler}, res=>{
-          if(res.error && res.error()) log(`unbind ${b.event}: ${res.error()} / ${(res.error_description && res.error_description())||''}`,'err');
-          else log(`Снята подписка ${b.event}`,'ok');
-        });
-      });
-    });
-  }
-
-  document.getElementById('bind').onclick = bind;
-  document.getElementById('unbind').onclick = unbind;
-  document.getElementById('reload').onclick = loadResources;
-  document.getElementById('q').oninput = filter;
-
-  BX24.init(async ()=>{
-    log('BX24 инициализировaно. Загружаю ресурсы (Booking API)…','muted');
-    await loadResources();
+    listEl.querySelectorAll('input[type=checkbox]').forEach(cb=>{ if(ids.has(cb.value)) cb.checked=true; });
+    log(`Активные подписки: ${mine.map(x=>x.event).join(', ')}; IDs=[${Array.from(ids).join(',')||'—'}]`);
   });
-</script>
+}
 
+function bind(){
+  const ids = selectedIds();
+  if(!ids.length){ alert('Нужно выбрать хотя бы один ресурс/секцию'); return; }
+
+  const hCheck = validHandler(handlerEl.value);
+  if(!hCheck.ok){ alert('Handler: '+hCheck.reason); return; }
+
+  const tz = (tzEl.value||'').trim();
+  if(tz && !validTz(tz)){ alert('Некорректная TZ'); return; }
+
+  // определим текущий режим по бейджу
+  const mode = (modeTag.textContent||'').includes('Booking') ? 'Booking' : 'Calendar';
+
+  // снимаем наши старые подписки на тот же handler
+  BX24.callMethod('event.get', {}, r=>{
+    if(!r.error || !r.error()) (r.data()||[]).filter(b=> sameBase(b.handler)).forEach(b=> BX24.callMethod('event.unbind',{event:b.event,handler:b.handler},()=>{}));
+  });
+
+  // собираем URL
+  const base = (handlerEl.value||'').trim();
+  const u = new URL(base);
+  if(mode==='Booking'){ u.searchParams.set('resources', ids.join(',')); }
+  else { u.searchParams.set('sections', ids.join(',')); u.searchParams.set('tz', tz||'Asia/Almaty'); }
+  const h = u.toString();
+
+  // события
+  const events = mode==='Booking' ? ['onBookingAdd','onBookingUpdate'] : ['onCalendarEventAdd','onCalendarEventUpdate'];
+
+  events.forEach(ev=>{
+    BX24.callMethod('event.bind',{ event:ev, handler:h }, res=>{
+      if(res.error && res.error()) log(`bind ${ev}: ${res.error()} / ${(res.error_description && res.error_description())||''}`,'err');
+      else log(`OK bind ${ev} → ${h}`,'ok');
+    });
+  });
+}
+
+function unbind(){
+  BX24.callMethod('event.get', {}, r=>{
+    if(r.error && r.error()){ log(`event.get: ${r.error()} / ${(r.error_description && r.error_description())||''}`,'err'); return; }
+    (r.data()||[]).filter(b=> sameBase(b.handler)).forEach(b=>{
+      BX24.callMethod('event.unbind',{event:b.event,handler:b.handler}, res=>{
+        if(res.error && res.error()) log(`unbind ${b.event}: ${res.error()} / ${(res.error_description && res.error_description())||''}`,'err');
+        else log(`Снята подписка ${b.event}`,'ok');
+      });
+    });
+  });
+}
+
+/* ====================== САМОТЕСТ (всё и сразу) ====================== */
+async function selftest(){
+  log('— Самотест —','muted');
+  // 1) среда
+  try{
+    log(`IN_IFRAME=${(window !== window.top)}`, 'muted');
+    if(typeof BX24==='undefined'){ log('BX24 не найден в окне (скрипт API не загрузился)','err'); return; }
+    log(`BX24.init ok`, 'muted');
+  }catch(e){ log('Ошибка среды: '+String(e),'err'); }
+
+  // 2) app.info / scopes
+  const scopes = await getScopes();
+  log('Scopes: '+(scopes.join(', ')||'—'),'muted');
+
+  // 3) booking ping
+  const ping = await pCall('booking.v1.resource.list', {select:['id'],limit:1});
+  if(ping.ok){ log('booking.v1.resource.list — OK','ok'); }
+  else { log(`booking.v1.resource.list — ${ping.error} ${ping.desc||''}`,'warn'); }
+
+  // 4) calendar ping
+  const cal = await pCall('calendar.section.get',{type:'resource',ownerId:1});
+  if(cal.ok || (cal.error && !String(cal.error).toLowerCase().includes('method_not_found'))){
+    log('calendar.section.get — доступен','ok');
+  } else {
+    log(`calendar.section.get — ${cal.error||'нет'}`,'warn');
+  }
+
+  // 5) handler/tz/ids
+  const ids = selectedIds();
+  const hCheck = validHandler(handlerEl.value);
+  log('Handler: '+(hCheck.ok?'OK':'BAD '+hCheck.reason), hCheck.ok?'ok':'err');
+  const tz = (tzEl.value||'').trim(); log('TZ: '+(tz || '—'), tz && !validTz(tz) ? 'warn' : 'muted');
+  log('Выбрано ID: '+(ids.join(', ')||'—'), ids.length?'ok':'warn');
+}
+
+/* ====================== ХУКИ UI ====================== */
+document.getElementById('bind').onclick = bind;
+document.getElementById('unbind').onclick = unbind;
+document.getElementById('reload').onclick = loadList;
+document.getElementById('selftest').onclick = selftest;
+document.getElementById('q').oninput = filter;
+
+BX24.init(async ()=>{ log('BX24 инициализировано. Загружаю список…','muted'); await loadList(); });
+</script>
 </body>
 </html>
