@@ -52,6 +52,7 @@
   </div>
 
 <script>
+  // ===== УТИЛИТЫ UI =====
   const logEl = document.getElementById('log');
   const listEl = document.getElementById('list');
   const qEl = document.getElementById('q');
@@ -82,18 +83,71 @@
   function sameBase(h){ try{const u=new URL(h); const b=new URL(handlerEl.value); return (u.origin+u.pathname)===(b.origin+b.pathname);}catch{return false;} }
   function idsFromHandler(h){ try{const u=new URL(h); return (u.searchParams.get('resources')||'').split(',').filter(Boolean);}catch{return [];} }
 
-  const pCall  = (method, params={}) => new Promise(res => BX24.callMethod(method, params, r => res(r)));
+  // ===== ОБЁРТКА НАД BX24 С ЯВНЫМИ ОШИБКАМИ =====
+  const pCall  = (method, params={}) => new Promise(resolve => {
+    BX24.callMethod(method, params, r => {
+      try {
+        if (r && typeof r.error === 'function' && r.error()) {
+          resolve({ ok:false, error:r.error(), description: (r.error_description && r.error_description()) || '' , raw:r });
+        } else {
+          const data = r && typeof r.data==='function' ? r.data() : null;
+          resolve({ ok:true, data, raw:r });
+        }
+      } catch(e) { resolve({ ok:false, error:String(e) }); }
+    });
+  });
 
+  // ===== ДИАГНОСТИКА ДОСТУПА (ПОКАЖЕТ SCOPES И ОШИБКИ) =====
+  async function diagnoseAccess() {
+    try {
+      const info = await pCall('app.info', {});
+      if (info.ok) {
+        const scopes = (info.data && info.data.scope) || [];
+        log('Scopes приложения: ' + (scopes.join(', ') || '—'), 'muted');
+        if (!scopes.includes('booking')) log('⚠️ У приложения нет scope "booking" — Booking API будет недоступен', 'err');
+      } else {
+        log('app.info: ' + info.error + ' ' + (info.description||''), 'err');
+      }
+
+      // Проверим, доступен ли сам метод
+      const ping = await pCall('booking.v1.resource.list', { select: ['id'], limit: 1 });
+      if (!ping.ok) {
+        log(`booking.v1.resource.list → ${ping.error} ${ping.description||''}`, 'err');
+      }
+    } catch(e) {
+      log('diagnoseAccess error: '+String(e), 'err');
+    }
+  }
+
+  // ===== ЗАГРУЗКА РЕСУРСОВ ЧЕРЕЗ BOOKING API (С ПАГИНАЦИЕЙ) =====
   async function loadResources(){
     listEl.classList.add('muted'); listEl.textContent = 'Загрузка…';
     try {
-      // Booking API: список ресурсов
-      const r = await pCall('booking.v1.resource.list', { select: ['id','name','status'] });
-      const data = r && typeof r.data==='function' ? r.data() : (r && r.result);
-      const items = data?.items || data || [];
+      const items = [];
+      let page = 1, more = true;
+
+      while (more) {
+        const resp = await pCall('booking.v1.resource.list', { select: ['id','name','status'], page });
+        if (!resp.ok) {
+          listEl.textContent = `Ошибка: ${resp.error} ${resp.description||''}`;
+          log(`booking.v1.resource.list(page=${page}) → ${resp.error} ${resp.description||''}`, 'err');
+          await diagnoseAccess();
+          return;
+        }
+        // Возможны два формата: {items, next} ИЛИ массив
+        const chunk = (resp.data && (resp.data.items || resp.data)) || [];
+        if (Array.isArray(chunk)) items.push(...chunk);
+        // next может быть true/false, номер, либо отсутствовать
+        const next = resp.data && (resp.data.next ?? null);
+        if (next === null || next === undefined || next === false || chunk.length === 0) { more = false; }
+        else { page = (typeof next === 'number' ? next : page + 1); }
+      }
+
       listEl.innerHTML = '';
-      if (!Array.isArray(items) || !items.length) {
+      if (!items.length) {
         listEl.textContent = 'Ресурсы не найдены (Booking API)';
+        log('booking.v1.resource.list вернул пусто. Проверь: включён ли модуль Онлайн-записи, созданы ли «Ресурсы» и «Услуги».', 'muted');
+        await diagnoseAccess();
         return;
       }
       items.forEach(x => listEl.appendChild(mkRow(x)));
@@ -101,15 +155,18 @@
     } catch(e){
       listEl.textContent = 'Ошибка загрузки ресурсов';
       log(String(e),'err');
+      await diagnoseAccess();
     } finally {
       listEl.classList.remove('muted');
     }
   }
 
+  // ===== ПРЕДЗАПОЛНЕНИЕ ЧЕКБОКСОВ ПО АКТИВНЫМ ПОДПИСКАМ =====
   function preselect(){
     BX24.callMethod('event.get', {}, r=>{
-      if(r.error()) return;
-      const binds = r.data().filter(b=> sameBase(b.handler));
+      if(r.error && r.error()) return;
+      const data = r.data ? r.data() : [];
+      const binds = data.filter(b=> sameBase(b.handler));
       if(!binds.length){ log('Наших подписок пока нет.','muted'); return; }
       const ids = new Set(); binds.forEach(b=> idsFromHandler(b.handler).forEach(x=>ids.add(x)));
       listEl.querySelectorAll('input[type=checkbox]').forEach(cb=>{ if(ids.has(cb.value)) cb.checked=true; });
@@ -117,20 +174,20 @@
     });
   }
 
+  // ===== УПРАВЛЕНИЕ ПОДПИСКАМИ НА onBooking* =====
   function bind(){
     const ids = selectedIds();
     if(!ids.length){ alert('Выберите хотя бы один ресурс'); return; }
 
     // снимаем наши старые подписки на этот же handler
     BX24.callMethod('event.get', {}, r=>{
-      if(!r.error()) r.data().filter(b=> sameBase(b.handler)).forEach(b=> BX24.callMethod('event.unbind',{event:b.event,handler:b.handler},()=>{}));
+      if(!r.error || !r.error()) (r.data()||[]).filter(b=> sameBase(b.handler)).forEach(b=> BX24.callMethod('event.unbind',{event:b.event,handler:b.handler},()=>{}));
     });
 
     const h = handlerUrl(ids);
-    // Подписываем именно на события модуля бронирования
     ['onBookingAdd','onBookingUpdate'].forEach(ev=>{
       BX24.callMethod('event.bind', { event: ev, handler: h }, res=>{
-        if(res.error()) log(`bind ${ev}: ${res.error()} / ${res.error_description()}`,'err');
+        if(res.error && res.error()) log(`bind ${ev}: ${res.error()} / ${(res.error_description && res.error_description())||''}`,'err');
         else log(`OK bind ${ev} → ${h}`,'ok');
       });
     });
@@ -138,10 +195,10 @@
 
   function unbind(){
     BX24.callMethod('event.get', {}, r=>{
-      if(r.error()){ log(`event.get: ${r.error()} / ${r.error_description()}`,'err'); return; }
-      r.data().filter(b=> sameBase(b.handler)).forEach(b=>{
+      if(r.error && r.error()){ log(`event.get: ${r.error()} / ${(r.error_description && r.error_description())||''}`,'err'); return; }
+      (r.data()||[]).filter(b=> sameBase(b.handler)).forEach(b=>{
         BX24.callMethod('event.unbind',{event:b.event,handler:b.handler}, res=>{
-          if(res.error()) log(`unbind ${b.event}: ${res.error()} / ${res.error_description()}`,'err');
+          if(res.error && res.error()) log(`unbind ${b.event}: ${res.error()} / ${(res.error_description && res.error_description())||''}`,'err');
           else log(`Снята подписка ${b.event}`,'ok');
         });
       });
@@ -153,7 +210,10 @@
   document.getElementById('reload').onclick = loadResources;
   document.getElementById('q').oninput = filter;
 
-  BX24.init(()=>{ log('BX24 инициализировано. Загружаю ресурсы (Booking API)…','muted'); loadResources(); });
+  BX24.init(async ()=>{
+    log('BX24 инициализировaно. Загружаю ресурсы (Booking API)…','muted');
+    await loadResources();
+  });
 </script>
 
 </body>
