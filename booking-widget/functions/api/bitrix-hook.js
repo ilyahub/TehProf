@@ -1,14 +1,14 @@
-// Cloudflare Pages Functions — обработчик событий Bitrix24 для «чистой» Онлайн‑записи
-// НЕ использует входящий вебхук. Берёт OAuth-токен из body: auth[access_token], auth[domain].
-// Подписываем: onBookingAdd / onBookingUpdate
-// URL вызывается Битриксом как POST (form-urlencoded или JSON).
-// Ожидает query: ?resources=1,2,3 — список ID ресурсов, для которых обрабатываем брони.
+// Cloudflare Pages Functions — универсальный хендлер Bitrix24
+// Поддерживает:
+//  • События Календаря: onCalendarEventAdd / onCalendarEventUpdate  → фильтр ?sections=1,2,3&tz=Asia/Almaty
+//  • События Онлайн-записи: onBookingAdd / onBookingUpdate          → фильтр ?resources=10,11
+// Принимает POST в JSON или x-www-form-urlencoded (data[...], auth[...])
 
 async function parseIncoming(request) {
   const ct = request.headers.get('content-type') || '';
-  if (ct.includes('application/json')) return await request.json();
-
-  // x-www-form-urlencoded -> в объект с разбором data[...], auth[...]
+  if (ct.includes('application/json')) {
+    try { return await request.json(); } catch { return {}; }
+  }
   const text = await request.text();
   const p = new URLSearchParams(text);
   const obj = {};
@@ -25,73 +25,121 @@ async function parseIncoming(request) {
   return obj;
 }
 
+function json(o,code=200){ return new Response(JSON.stringify(o),{status:code,headers:{'content-type':'application/json'}}); }
+async function toJson(res){ const t=await res.text(); try{ return JSON.parse(t);}catch{ return {raw:t}; } }
+
 export async function onRequestPost(ctx) {
+  const startTs = Date.now();
   try {
     const { request } = ctx;
     const url = new URL(request.url);
     const payload = await parseIncoming(request);
 
-    const eventType = payload?.event || payload?.EVENT || '';
-    // booking events обычно присылают id записи в data.id
-    const bookingId = payload?.data?.id
-                   || payload?.data?.ID
-                   || payload?.data?.FIELDS?.ID
-                   || payload?.data?.booking?.id;
-    const auth   = payload?.auth || {};
-    const access = auth?.access_token;
-    const domain = auth?.domain;
+    const eventType = String(payload?.event || payload?.EVENT || '').trim();
+    const auth = payload?.auth || {};
+    const access = auth?.access_token || auth?.access || '';
+    const domain = auth?.domain || auth?.DOMAIN || '';
+    const base = domain ? `https://${domain}/rest/` : '';
 
-    if (!bookingId) return new Response('no booking id', { status: 400 });
-    if (!access || !domain) return new Response('no oauth token or domain', { status: 401 });
+    // Поддержка обоих вариантов фильтра
+    const allowSections = (url.searchParams.get('sections')||'').split(',').map(s=>s.trim()).filter(Boolean);
+    const allowResources = (url.searchParams.get('resources')||'').split(',').map(s=>s.trim()).filter(Boolean);
+    const tz = url.searchParams.get('tz') || 'Asia/Almaty';
 
-    // allowed resources из URL (?resources=1,2,3)
-    const allowed = (url.searchParams.get('resources') || '')
-      .split(',').map(s=>s.trim()).filter(Boolean);
+    // Базовые проверки
+    if(!eventType) return json({ok:false, why:'no event type', payload}, 400);
+    if(!access || !domain) return json({ok:false, why:'no oauth token or domain', eventType, haveAccess:!!access, haveDomain:!!domain}, 401);
 
-    const base = `https://${domain}/rest/`;
-
-    const restGet = (method, params={}) => {
+    const restGet = (method, params={})=>{
       const u = new URL(base + method);
       for (const [k,v] of Object.entries(params)) u.searchParams.set(k, String(v));
       u.searchParams.set('auth', access);
       return fetch(u.toString());
     };
-    const restPost = (method, body={}) => {
+    const restPost = (method, body={})=>{
       const u = new URL(base + method);
       u.searchParams.set('auth', access);
-      return fetch(u.toString(), {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body)
-      });
+      return fetch(u.toString(), { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(body) });
     };
 
-    // 1) Тянем саму бронь
-    const bkR = await restPost('booking.v1.booking.get.json', { id: bookingId });
-    const bkJ = await bkR.json();
-    const booking = bkJ?.result?.item || bkJ?.result || null;
-    if (!booking) return new Response('booking not found', { status: 404 });
-
-    // 2) Фильтр по ресурсам (если список в URL задан)
-    const resourceIds = (booking.resourceIds || []).map(String);
-    if (allowed.length && !resourceIds.some(id => allowed.includes(id))) {
-      return new Response(`skip: resources ${resourceIds.join(',')} not in allow-list`, { status: 200 });
+    // Унифицированные ответы об ошибках Bitrix
+    async function guardBitrix(res, method){
+      const status = res.status;
+      const data = await toJson(res);
+      const err = data?.error || data?.error_description || (status>=400 ? ('HTTP '+status) : null);
+      return { ok: !err, status, data, method, err };
     }
 
-    // 3) Тут можно делать вашу бизнес‑логику по брони (без календаря):
-    //    — менять статус, добавлять комментарий, пинговать CRM и т.д.
-    // Пример: без изменений, просто подтверждаем приём
-    // await restPost('booking.v1.booking.update.json', { id: bookingId, fields: { /* ... */ } });
+    // ==== ВЕТКА BOOKING (onBooking*) =======================================
+    if (/onBooking(Add|Update)/i.test(eventType)) {
+      const bookingId = payload?.data?.id || payload?.data?.ID || payload?.data?.FIELDS?.ID || payload?.data?.booking?.id;
+      if(!bookingId) return json({ok:false, why:'no booking id', eventType, payload}, 400);
 
-    return new Response(JSON.stringify({
-      ok: true,
-      eventType,
-      bookingId,
-      resourceIds,
-      status: booking.status || null
-    }), { status: 200 });
+      // Получаем бронь
+      const r = await guardBitrix(await restPost('booking.v1.booking.get.json', { id: bookingId }), 'booking.v1.booking.get');
+      if(!r.ok) return json({ok:false, why:'booking.get failed', details:r}, 502);
+
+      const booking = r.data?.result?.item || r.data?.result || r.data?.item || null;
+      if(!booking) return json({ok:false, why:'booking not found', details:r.data}, 404);
+
+      // Фильтр по ресурсам, если задан
+      const resIds = (booking.resourceIds || []).map(String);
+      if (allowResources.length && !resIds.some(id=>allowResources.includes(id))) {
+        return json({ok:true, skipped:true, reason:'resource not allowed', resIds, allowResources});
+      }
+
+      // Здесь ваша бизнес-логика по брони (CRM, статусы, комментарии и т.п.)
+      // Пример «мягкой отметки» — добавим комментарий (если поддерживается у вас)
+      // await guardBitrix(await restPost('booking.v1.booking.update.json', { id: bookingId, fields: { comment: 'Processed by Hook' } }), 'booking.update');
+
+      return json({ ok:true, mode:'Booking', eventType, bookingId, resourceIds:resIds, tookMs: Date.now()-startTs });
+    }
+
+    // ==== ВЕТКА CALENDAR (onCalendarEvent*) ================================
+    if (/onCalendarEvent(Add|Update)/i.test(eventType)) {
+      const eventId = payload?.data?.FIELDS?.ID || payload?.data?.fields?.ID || payload?.data?.event?.id;
+      if(!eventId) return json({ok:false, why:'no calendar event id', eventType, payload}, 400);
+
+      // Берём событие
+      const ev0 = await guardBitrix(await restGet('calendar.event.getbyid.json', { id: eventId }), 'calendar.event.getbyid');
+      if(!ev0.ok) return json({ok:false, why:'event.getbyid failed', details:ev0}, 502);
+
+      const item = ev0.data?.result || ev0.data?.result?.item || ev0.data?.item || null;
+      if(!item) return json({ok:false, why:'event not found', details:ev0.data}, 404);
+
+      // Фильтр по секциям (если задан)
+      const sectionId = String(item.SECTION_ID ?? item.sectionId ?? '');
+      if (allowSections.length && !allowSections.includes(sectionId)) {
+        return json({ok:true, skipped:true, reason:'section not allowed', sectionId, allowSections});
+      }
+
+      // Защита от повтора
+      const descr = String(item.DESCRIPTION || '');
+      if (descr.includes('#ALLDAY_SET') || String(item.SKIP_TIME||item.skip_time||'').toUpperCase()==='Y') {
+        return json({ok:true, skipped:true, reason:'already processed', sectionId});
+      }
+
+      // Переводим в all-day (однодневное)
+      const startStr = String(item.DATE_FROM || item.date_from || '').replace(' ', 'T');
+      const d = startStr ? new Date(startStr) : new Date();
+      const yyyy=d.getFullYear(), mm=String(d.getMonth()+1).padStart(2,'0'), dd=String(d.getDate()).padStart(2,'0');
+      const DATE_FROM = `${yyyy}-${mm}-${dd}`;
+      const DATE_TO   = `${yyyy}-${mm}-${dd}`;
+
+      const upd = await guardBitrix(await restPost('calendar.event.update.json', {
+        id: eventId,
+        fields: { DATE_FROM, DATE_TO, SKIP_TIME:'Y', DESCRIPTION: `${descr}\n#ALLDAY_SET` }
+      }), 'calendar.event.update');
+
+      if(!upd.ok) return json({ok:false, why:'event.update failed', details:upd}, 502);
+
+      return json({ ok:true, mode:'Calendar', eventType, eventId, sectionId, DATE_FROM, DATE_TO, tookMs: Date.now()-startTs });
+    }
+
+    // Неизвестный тип (ничего не ломаем, но логируем)
+    return json({ ok:true, skipped:true, reason:'unknown event type', eventType, tookMs: Date.now()-startTs });
 
   } catch (e) {
-    return new Response(String(e), { status: 500 });
+    return json({ ok:false, error:String(e) }, 500);
   }
 }
