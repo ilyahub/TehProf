@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
-  <title>Booking Hook — ресурсы/календарь с полной автодиагностикой</title>
+  <title>Booking Hook — только Booking API (полная диагностика)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <script src="https://api.bitrix24.com/api/v1/"></script>
   <style>
@@ -30,15 +30,15 @@
   </style>
 </head>
 <body>
-  <h2>Онлайн-запись: выбор <u>ресурсов</u>/<u>календарей</u> и регистрация событий</h2>
-  <p class="muted">Сначала пробуем <b>Booking API</b>. Если он недоступен — автоматически переключаемся на <b>Calendar</b> (ресурсные секции). Внизу — расширенная диагностика.</p>
+  <h2>Онлайн-запись (Booking API): выбор <u>ресурсов</u> и регистрация onBooking-событий</h2>
+  <p class="muted">Здесь всё крутится только вокруг модуля <b>Онлайн-запись</b> (Booking API). Календарь не используется.</p>
 
   <div class="card">
     <div class="row" style="gap:16px">
-      <input id="q" type="search" placeholder="Поиск по названию.." />
+      <input id="q" type="search" placeholder="Поиск по названию ресурса…" />
       <button id="reload" class="btn">Обновить список</button>
-      <span id="mode-tag" class="pill muted">режим: неизвестно</span>
       <span id="portal-tag" class="pill muted"></span>
+      <span id="mode-tag" class="pill ok">режим: Booking</span>
     </div>
     <div id="list" class="list muted">Загрузка…</div>
   </div>
@@ -48,18 +48,13 @@
       <label>Хендлер (Cloudflare):</label>
       <input id="handler" type="text" value="https://booking-widget-d47.pages.dev/api/bitrix-hook" />
     </div>
-    <div class="row" style="margin-top:8px">
-      <label>TZ:</label>
-      <input id="tz" type="text" value="Asia/Almaty" style="width:220px"/>
-      <span class="muted">Пример: <span class="kbd">Asia/Almaty</span>, <span class="kbd">Europe/Moscow</span></span>
-    </div>
     <div class="row" style="margin-top:10px">
-      <button id="bind" class="btn primary">Подписать</button>
+      <button id="bind" class="btn primary">Подписать onBookingAdd / onBookingUpdate</button>
       <button id="unbind" class="btn">Снять все подписки</button>
       <button id="selftest" class="btn">Самотест</button>
     </div>
     <p class="muted" style="margin-top:8px">
-      В режиме <b>Booking</b> в хендлер уйдёт <code>?resources=ID1,ID2</code>. В режиме <b>Calendar</b> — <code>?sections=ID1,ID2&amp;tz=…</code>.
+      В хендлер будет передан параметр <code>?resources=ID1,ID2</code>. Никаких <code>?sections</code>, TZ и календарей.
     </p>
   </div>
 
@@ -73,291 +68,171 @@
     <b>Диагностика (резюме)</b>
     <div class="hr"></div>
     <table id="diag-table">
-      <thead><tr>
-        <th>Проверка</th><th>Результат</th><th>Комментарий</th>
-      </tr></thead>
+      <thead><tr><th>Проверка</th><th>Результат</th><th>Комментарий</th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
 
 <script>
-/* ========= helpers ========= */
-const logEl = document.getElementById('log');
-const listEl = document.getElementById('list');
-const qEl = document.getElementById('q');
-const tzEl = document.getElementById('tz');
-const handlerEl = document.getElementById('handler');
-const modeTag = document.getElementById('mode-tag');
-const portalTag = document.getElementById('portal-tag');
-const diagBody = document.querySelector('#diag-table tbody');
+/* ===== helpers ===== */
+const logEl=document.getElementById('log');
+const listEl=document.getElementById('list');
+const qEl=document.getElementById('q');
+const handlerEl=document.getElementById('handler');
+const portalTag=document.getElementById('portal-tag');
+const modeTag=document.getElementById('mode-tag');
+const diagBody=document.querySelector('#diag-table tbody');
 
-function log(msg, cls){ const d=document.createElement('div'); if(cls) d.className=cls; d.textContent=msg; logEl.appendChild(d); }
-function rowProbe(name, result, note, cls){
-  const tr=document.createElement('tr');
-  const td1=document.createElement('td'); td1.textContent=name;
-  const td2=document.createElement('td'); td2.textContent=result; td2.className=(cls||'');
-  const td3=document.createElement('td'); td3.textContent=note||'';
-  tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3); diagBody.appendChild(tr);
-}
-function setMode(m){ modeTag.textContent='режим: '+m; modeTag.className='pill '+(m==='Booking'?'ok':(m==='Calendar'?'warn':'muted')); }
-function setPortalTag(txt){ portalTag.textContent=txt; portalTag.className='pill muted'; }
-function validTz(t){ return /^[A-Za-z_]+\/[A-Za-z_]+$/.test((t||'').trim()); }
-function validHandler(u){
-  try{ const url=new URL((u||'').trim()); return /^https:$/i.test(url.protocol); }catch{ return false; }
-}
+function log(msg, cls){const d=document.createElement('div');if(cls)d.className=cls;d.textContent=msg;logEl.appendChild(d);}
+function rowProbe(name,res,note,cls){const tr=document.createElement('tr');const a=document.createElement('td');a.textContent=name;const b=document.createElement('td');b.textContent=res;b.className=cls||'';const c=document.createElement('td');c.textContent=note||'';tr.append(a,b,c);diagBody.appendChild(tr);}
+function validHandler(u){try{const x=new URL((u||'').trim());return /^https:$/i.test(x.protocol);}catch{return false;}}
+function mkRow(r){const lbl=document.createElement('label');lbl.className='item';const cb=document.createElement('input');cb.type='checkbox';cb.value=String(r.id);const name=document.createElement('span');name.textContent=r.name||'(без названия)';const small=document.createElement('small');small.textContent=`#${r.id} • ${r.status||'active'}`;lbl.append(cb,name,small);lbl.dataset.name=(r.name||'').toLowerCase();return lbl;}
+function filter(){const q=qEl.value.trim().toLowerCase();Array.from(listEl.querySelectorAll('label.item')).forEach(el=>{el.style.display=!q||el.dataset.name.includes(q)?'':'';});}
+function selectedIds(){return Array.from(listEl.querySelectorAll('input[type=checkbox]:checked')).map(x=>x.value);}
+function sameBase(h){try{const u=new URL(h);const b=new URL(handlerEl.value);return (u.origin+u.pathname)===(b.origin+b.pathname);}catch{return false;}}
+function idsFromHandler(h){try{const u=new URL(h);return (u.searchParams.get('resources')||'').split(',').filter(Boolean);}catch{return[];}}
 
-/* ========= BX24 wrappers ========= */
-const pCall = (method, params={}) => new Promise(res=>{
-  try {
-    BX24.callMethod(method, params, r=>{
-      try {
-        if (r && typeof r.error === 'function' && r.error()) {
-          res({ok:false, error:r.error(), desc:(r.error_description&&r.error_description())||'', data:null, raw:r});
-        } else {
-          res({ok:true, data:(r&&r.data&&r.data())||null, raw:r});
-        }
-      } catch(e){ res({ok:false,error:String(e),data:null}); }
-    });
-  } catch(e){ res({ok:false,error:String(e),data:null}); }
-});
-const pBatch = (cmds) => new Promise(res=>{ try{ BX24.callBatch(cmds, res); }catch(e){ res(null); } });
+/* ===== BX24 wrappers ===== */
+const pCall=(m,p={})=>new Promise(res=>{try{BX24.callMethod(m,p,r=>{try{if(r&&typeof r.error==='function'&&r.error()){res({ok:false,error:r.error(),desc:(r.error_description&&r.error_description())||'',data:null});}else{res({ok:true,data:(r&&r.data&&r.data())||null});}}catch(e){res({ok:false,error:String(e)})}});}catch(e){res({ok:false,error:String(e)})}}));
 
-/* ========= env / scopes ========= */
-async function getEnv(){
-  return new Promise(resolve=>{
-    BX24.callMethod('app.info', {}, r=>{
-      let domain = '', member_id='', user_id='', scope=[];
-      try{
-        const d=r.data(); domain=d.domain||d.DOMAIN||''; member_id=d.member_id||d.MEMBER_ID||''; user_id=d.user_id||d.USER_ID||'';
-        scope=d.scope||d.SCOPE||[];
-      }catch{}
-      resolve({domain, member_id, user_id, scope:Array.isArray(scope)?scope:[]});
-    });
-  });
-}
+/* ===== ENV ===== */
+async function getEnv(){return new Promise(resolve=>{BX24.callMethod('app.info',{},r=>{let domain='',scope=[];try{const d=r.data();domain=d.domain||d.DOMAIN||'';scope=d.scope||d.SCOPE||[];}catch{}resolve({domain,scope:Array.isArray(scope)?scope:[]});});});}
 
-/* ========= mode detection ========= */
-async function detectMode(){
-  const t = await pCall('booking.v1.resource.list',{select:['id'],limit:1});
-  if(t.ok){ log('Booking API доступен.','ok'); rowProbe('Booking API', 'OK', 'booking.v1.resource.list доступен','ok'); return 'Booking'; }
-  const e=(t.error||'').toLowerCase();
-  rowProbe('Booking API','НЕТ', t.error+' '+(t.desc||''), 'err');
-  log('Booking API недоступен → переключаюсь на Calendar.','warn');
-  return 'Calendar';
-}
-
-/* ========= data loaders ========= */
-function mkRow(obj){
-  const lbl=document.createElement('label'); lbl.className='item';
-  const cb=document.createElement('input'); cb.type='checkbox'; cb.value=String(obj.id||obj.ID);
-  const name=document.createElement('span'); name.textContent=obj.name||obj.NAME||'(без названия)';
-  const small=document.createElement('small');
-  small.textContent = obj.status?`#${obj.id} • ${obj.status}`:(`#${obj.ID} • ${(obj.CAL_TYPE||obj.type||'').toLowerCase()}`);
-  lbl.appendChild(cb); lbl.appendChild(name); lbl.appendChild(small);
-  lbl.dataset.name=(obj.name||obj.NAME||'').toLowerCase();
-  return lbl;
-}
-function filter(){ const q=qEl.value.trim().toLowerCase();
-  Array.from(listEl.querySelectorAll('label.item')).forEach(el=>{ el.style.display=!q||el.dataset.name.includes(q)?'':''; });
-}
-function selectedIds(){ return Array.from(listEl.querySelectorAll('input[type=checkbox]:checked')).map(x=>x.value); }
-function sameBase(h){ try{const u=new URL(h); const b=new URL(handlerEl.value); return (u.origin+u.pathname)===(b.origin+b.pathname);}catch{return false;} }
-function idsFromHandler(h,key){ try{const u=new URL(h); return (u.searchParams.get(key)||'').split(',').filter(Boolean);}catch{return []; } }
-
-async function loadBookingResources(){
-  const items=[]; let page=1, iter=0;
-  while(iter++<50){ // защита от зацикливания
+/* ===== Booking loaders & diagnostics ===== */
+async function loadResources(){
+  const items=[];let page=1,iter=0;
+  while(iter++<50){
     const r=await pCall('booking.v1.resource.list',{select:['id','name','status'],page});
-    if(!r.ok){ log(`booking.v1.resource.list(${page}) → ${r.error} ${r.desc||''}`,'err'); rowProbe('Resources (Booking)','Ошибка',`${r.error} ${r.desc||''}`,'err'); break; }
+    if(!r.ok){rowProbe('Resources','Ошибка',`${r.error||''} ${r.desc||''}`,'err');break;}
     const chunk=(r.data&&(r.data.items||r.data))||[];
     if(Array.isArray(chunk)) items.push(...chunk);
     const next=(r.data&&(r.data.next??null));
-    if(!next||!chunk.length) break;
+    if(!next||!chunk.length)break;
     page=typeof next==='number'?next:page+1;
   }
-  rowProbe('Resources (Booking)', String(items.length), items.length?'ОК':'Пусто',''+(items.length?'ok':'warn'));
+  rowProbe('Resources',String(items.length),items.length?'ОК':'Пусто',items.length?'ok':'warn');
   return items;
 }
 
-async function loadBookingDiagnostics(resourceIds){
-  // 1) Брони на период [-7; +30 дней]
-  const now=new Date(); const from=new Date(now.getTime()-7*86400000); const to=new Date(now.getTime()+30*86400000);
-  const iso=(d)=>d.toISOString().slice(0,19)+'+00:00';
-  const b=await pCall('booking.v1.booking.list',{filter:{dateFrom:iso(from),dateTo:iso(to),resourceIds:resourceIds||[]},select:['id','dateFrom','dateTo','resourceIds','status'],limit:50});
-  if(b.ok){ const arr=(b.data?.items||b.data||[]); rowProbe('Bookings (30d)', String(arr.length), arr.length?'ОК':'Нет броней',''+(arr.length?'ok':'warn')); }
-  else{ rowProbe('Bookings (30d)','Ошибка',`${b.error} ${b.desc||''}`,'err'); }
-
-  // 2) Слоты на 7 дней (если метод есть)
-  const s=await pCall('booking.v1.slot.list',{filter:{dateFrom:iso(now),dateTo:iso(new Date(now.getTime()+7*86400000)),resourceIds:(resourceIds||[]).slice(0,3)}});
-  if(s.ok){ const arr=(s.data?.items||s.data||[]); rowProbe('Slots (7d)', Array.isArray(arr)?String(arr.length):'есть', 'Если 0 — нет доступных окон',''+(Array.isArray(arr)&&arr.length?'ok':'warn')); }
-  else{
-    const ee=(s.error||'').toLowerCase();
-    if(ee.includes('method_not_found')) rowProbe('Slots (7d)','Нет метода','На портале нет booking.v1.slot.list — не критично','warn');
-    else rowProbe('Slots (7d)','Ошибка',`${s.error} ${s.desc||''}`,'err');
-  }
+async function diagServices(){
+  const r=await pCall('booking.v1.service.list',{select:['id','name','duration','active'],limit:100});
+  if(r.ok){const arr=(r.data?.items||r.data||[]);rowProbe('Services',String(arr.length),arr.length?'ОК':'Нет услуг',arr.length?'ok':'warn');}
+  else{rowProbe('Services','Ошибка',`${r.error||''} ${r.desc||''}`,'err');}
 }
 
-async function discoverCalendarSections(){
-  // быстрый путь
-  const m = await pCall('calendar.section.get',{type:'resource'});
-  if(m.ok && Array.isArray(m.data)){ rowProbe('Sections (Calendar)',String(m.data.length),m.data.length?'ОК':'Пусто',m.data.length?'ok':'warn'); return m.data; }
-  // fallback: по событиям
-  rowProbe('Sections (Calendar)','Скан по событиям','Метод section.get недоступен — пробую через event.get','warn');
-  const from=new Date(); from.setDate(from.getDate()-7);
-  const to=new Date(); to.setDate(to.getDate()+60);
-  const fmt=d=>d.toISOString().slice(0,19).replace('T',' ');
-  const ids=new Set(); const dayCount=Math.ceil((to-from)/86400000);
-  for(let i=0;i<dayCount;i+=20){
-    const batch={};
-    for(let d=0;d<20 && (i+d)<dayCount;d++){
-      const d1=new Date(from); d1.setDate(from.getDate()+i+d);
-      const d2=new Date(d1); d2.setDate(d1.getDate()+1);
-      batch['E'+(i+d)]=['calendar.event.get',{from:fmt(d1),to:fmt(d2)}];
-    }
-    const ans=await new Promise(resolve=>{try{BX24.callBatch(batch,resolve)}catch(e){resolve({})}});
-    for(const k in ans){ const a=ans[k]; const arr=a&&a.answer&&Array.isArray(a.answer.result)?a.answer.result:[]; arr.forEach(ev=>{ const sid=String(ev.SECTION_ID||''); if(sid) ids.add(sid); }); }
-  }
-  const rows=[];
-  for(const sid of Array.from(ids).slice(0,200)){
-    const r=await pCall('calendar.section.getbyid',{id:sid});
-    const sec=r.ok?(Array.isArray(r.data)?r.data[0]:r.data):null;
-    if(sec && String(sec.CAL_TYPE||'').toLowerCase()==='resource') rows.push(sec);
-  }
-  rowProbe('Sections (Calendar)-fallback', String(rows.length), rows.length?'ОК':'Не нашли секции', rows.length?'ok':'warn');
-  return rows;
+async function diagSlots(resourceIds){
+  const now=new Date();const to=new Date(now.getTime()+7*86400000);
+  const iso=d=>d.toISOString().slice(0,19)+'+00:00';
+  const r=await pCall('booking.v1.slot.list',{filter:{dateFrom:iso(now),dateTo:iso(to),resourceIds:(resourceIds||[]).slice(0,3)}});
+  if(r.ok){const arr=(r.data?.items||r.data||[]);rowProbe('Slots (7d)',Array.isArray(arr)?String(arr.length):'есть',Array.isArray(arr)&&!arr.length?'нет доступных окон':'',Array.isArray(arr)&&arr.length?'ok':'warn');}
+  else{const ee=String(r.error||'').toLowerCase();if(ee.includes('method_not_found'))rowProbe('Slots (7d)','Нет метода','booking.v1.slot.list отсутствует — не критично','warn');else rowProbe('Slots (7d)','Ошибка',`${r.error||''} ${r.desc||''}`,'err');}
 }
 
-/* ========= main loaders ========= */
-async function loadList(){
-  // очистить диаграмму/резюме
-  diagBody.innerHTML='';
-  listEl.classList.add('muted'); listEl.textContent='Загрузка…';
-  try{
-    // ENV
-    const env = await getEnv();
-    setPortalTag(env.domain?('portal: '+env.domain):'портал: ?');
-    rowProbe('Scopes', env.scope.join(', ')||'—', '', env.scope.length?'ok':'warn');
-
-    const mode = await detectMode();
-    setMode(mode);
-
-    let items=[];
-    if(mode==='Booking'){
-      items = await loadBookingResources();
-      const ids = items.map(x=>x.id);
-      await loadBookingDiagnostics(ids);
-    } else {
-      items = await discoverCalendarSections();
-      // Простая проверка событий на ближайшие 7 дней
-      const now=new Date(); const to=new Date(now.getTime()+7*86400000);
-      const fmt=d=>d.toISOString().slice(0,19).replace('T',' ');
-      const ev=await pCall('calendar.event.get',{from:fmt(now),to:fmt(to)});
-      if(ev.ok){ const arr=Array.isArray(ev.data)?ev.data:[]; rowProbe('Events (7d)', String(arr.length), '', arr.length?'ok':'warn'); }
-      else{ rowProbe('Events (7d)','Ошибка',`${ev.error} ${ev.desc||''}`,'err'); }
-    }
-
-    listEl.innerHTML='';
-    if(!items.length){
-      listEl.textContent = mode==='Booking' ? 'Ресурсы не найдены (Booking)' : 'Календари ресурсов не найдены (Calendar)';
-    } else {
-      items.forEach(x=> listEl.appendChild(mkRow(x)));
-      preselect(); filter();
-    }
-
-  }catch(e){
-    listEl.textContent='Ошибка загрузки';
-    rowProbe('loadList','Ошибка', String(e),'err');
-    log('loadList error: '+String(e),'err');
-  }finally{
-    listEl.classList.remove('muted');
-  }
+async function diagBookings(resourceIds){
+  const now=new Date();const from=new Date(now.getTime()-7*86400000);const to=new Date(now.getTime()+30*86400000);
+  const iso=d=>d.toISOString().slice(0,19)+'+00:00';
+  const r=await pCall('booking.v1.booking.list',{filter:{dateFrom:iso(from),dateTo:iso(to),resourceIds:resourceIds||[]},select:['id','status'],limit:100});
+  if(r.ok){const arr=(r.data?.items||r.data||[]);rowProbe('Bookings (−7..+30d)',String(arr.length),'',arr.length?'ok':'warn');}
+  else{rowProbe('Bookings (−7..+30d)','Ошибка',`${r.error||''} ${r.desc||''}`,'err');}
 }
 
-/* ========= subscriptions ========= */
+/* ===== Render list & actions ===== */
+function renderList(items){
+  listEl.innerHTML='';
+  if(!items.length){listEl.textContent='Ресурсы не найдены (Booking)';return;}
+  items.forEach(x=>listEl.appendChild(mkRow(x)));
+  preselect(); filter();
+}
+
 function preselect(){
-  BX24.callMethod('event.get', {}, r=>{
-    if(r.error && r.error()) return;
+  BX24.callMethod('event.get',{},r=>{
+    if(r.error&&r.error())return;
     const binds=(r.data&&r.data())||[];
-    const mine=binds.filter(b=> sameBase(b.handler));
-    if(!mine.length){ log('Наших подписок пока нет.','muted'); return; }
-    const ids=new Set();
-    mine.forEach(b=>{
-      idsFromHandler(b.handler,'resources').forEach(x=>ids.add(x));
-      idsFromHandler(b.handler,'sections').forEach(x=>ids.add(x));
-    });
-    listEl.querySelectorAll('input[type=checkbox]').forEach(cb=>{ if(ids.has(cb.value)) cb.checked=true; });
-    log(`Активные подписки: ${mine.map(x=>x.event).join(', ')}; IDs=[${Array.from(ids).join(',')||'—'}]`);
+    const mine=binds.filter(b=>sameBase(b.handler));
+    if(!mine.length){log('Наших подписок пока нет.','muted');return;}
+    const ids=new Set(); mine.forEach(b=>idsFromHandler(b.handler).forEach(x=>ids.add(x)));
+    listEl.querySelectorAll('input[type=checkbox]').forEach(cb=>{if(ids.has(cb.value))cb.checked=true;});
+    log(`Активные подписки: ${mine.map(x=>x.event).join(', ')}; resources=[${Array.from(ids).join(',')||'—'}]`);
   });
 }
+
 function bind(){
   const ids=selectedIds();
-  if(!ids.length){ alert('Выберите хотя бы один ресурс/секцию'); return; }
-  const tz=(tzEl.value||'').trim();
-  if(tz && !validTz(tz)){ alert('Некорректная TZ'); return; }
-  if(!validHandler(handlerEl.value)){ alert('Некорректный Handler URL'); return; }
+  if(!ids.length){alert('Выбери хотя бы один ресурс');return;}
+  if(!validHandler(handlerEl.value)){alert('Некорректный Handler URL');return;}
 
   // снимаем прежние на этот handler
-  BX24.callMethod('event.get', {}, r=>{
-    if(!r.error || !r.error()) (r.data()||[]).filter(b=> sameBase(b.handler)).forEach(b=> BX24.callMethod('event.unbind',{event:b.event,handler:b.handler},()=>{}));
+  BX24.callMethod('event.get',{},r=>{
+    if(!r.error||!r.error())(r.data()||[]).filter(b=>sameBase(b.handler)).forEach(b=>BX24.callMethod('event.unbind',{event:b.event,handler:b.handler},()=>{}));
   });
 
-  const mode = (modeTag.textContent||'').includes('Booking')?'Booking':'Calendar';
   const u=new URL((handlerEl.value||'').trim());
-  if(mode==='Booking'){ u.searchParams.set('resources', ids.join(',')); }
-  else{ u.searchParams.set('sections', ids.join(',')); u.searchParams.set('tz', tz||'Asia/Almaty'); }
+  u.searchParams.set('resources',ids.join(','));
   const h=u.toString();
 
-  const events = mode==='Booking' ? ['onBookingAdd','onBookingUpdate'] : ['onCalendarEventAdd','onCalendarEventUpdate'];
-  events.forEach(ev=>{
-    BX24.callMethod('event.bind', { event:ev, handler:h }, res=>{
-      if(res.error && res.error()) log(`bind ${ev}: ${res.error()} / ${(res.error_description&&res.error_description())||''}`,'err');
+  ['onBookingAdd','onBookingUpdate'].forEach(ev=>{
+    BX24.callMethod('event.bind',{event:ev,handler:h},res=>{
+      if(res.error&&res.error())log(`bind ${ev}: ${res.error()} / ${(res.error_description&&res.error_description())||''}`,'err');
       else log(`OK bind ${ev} → ${h}`,'ok');
     });
   });
 }
+
 function unbind(){
-  BX24.callMethod('event.get', {}, r=>{
-    if(r.error && r.error()){ log(`event.get: ${r.error()} / ${(r.error_description&&r.error_description())||''}`,'err'); return; }
-    (r.data()||[]).filter(b=> sameBase(b.handler)).forEach(b=>{
-      BX24.callMethod('event.unbind',{event:b.event,handler:b.handler}, res=>{
-        if(res.error && res.error()) log(`unbind ${b.event}: ${res.error()} / ${(res.error_description&&res.error_description())||''}`,'err');
+  BX24.callMethod('event.get',{},r=>{
+    if(r.error&&r.error()){log(`event.get: ${r.error()} / ${(r.error_description&&r.error_description())||''}`,'err');return;}
+    (r.data()||[]).filter(b=>sameBase(b.handler)).forEach(b=>{
+      BX24.callMethod('event.unbind',{event:b.event,handler:b.handler},res=>{
+        if(res.error&&res.error())log(`unbind ${b.event}: ${res.error()} / ${(res.error_description&&res.error_description())||''}`,'err');
         else log(`Снята подписка ${b.event}`,'ok');
       });
     });
   });
 }
 
-/* ========= selftest ========= */
-async function selftest(){
+/* ===== Page flow ===== */
+async function loadAll(){
   diagBody.innerHTML='';
-  rowProbe('В iframe', String(window!==window.top), 'Виджет должен работать в iframe Б24','muted');
-  const env=await getEnv(); setPortalTag(env.domain?('portal: '+env.domain):'портал: ?');
-  rowProbe('Portal', env.domain||'—','', env.domain?'ok':'warn');
-  rowProbe('Scopes', env.scope.join(', ')||'—','Нужны booking (для Booking) и event (для подписок)', (env.scope.includes('event') || env.scope.includes('booking'))?'ok':'warn');
-  rowProbe('TZ', (tzEl.value||'').trim()||'—', validTz(tzEl.value)?'OK':'Формат Region/City', validTz(tzEl.value)?'ok':'warn');
+  listEl.classList.add('muted'); listEl.textContent='Загрузка…';
+  try{
+    const env=await getEnv(); portalTag.textContent=env.domain?('portal: '+env.domain):'портал: ?';
+    rowProbe('Scopes', env.scope.join(', ')||'—', 'Нужны: booking (для API) и event (для подписок)', (env.scope.includes('booking')&&env.scope.includes('event'))?'ok':'warn');
 
-  // booking ping
-  const ping=await pCall('booking.v1.resource.list',{select:['id'],limit:1});
-  if(ping.ok){ rowProbe('booking.v1.resource.list','OK','доступен','ok'); }
-  else{ rowProbe('booking.v1.resource.list','Ошибка',`${ping.error} ${ping.desc||''}`,'err'); }
+    // Быстрый «ping» Booking
+    const ping=await pCall('booking.v1.resource.list',{select:['id'],limit:1});
+    if(ping.ok){rowProbe('Booking API','OK','booking.v1.resource.list доступен','ok');}
+    else{rowProbe('Booking API','Ошибка',`${ping.error||''} ${ping.desc||''}`,'err'); listEl.textContent='Booking API недоступен'; return;}
 
-  // calendar ping
-  const cal=await pCall('calendar.section.get',{type:'resource'});
-  if(cal.ok){ rowProbe('calendar.section.get','OK',`${Array.isArray(cal.data)?cal.data.length:0} секций`, 'ok'); }
-  else{ rowProbe('calendar.section.get','Ошибка',cal.error||'','warn'); }
+    // Основные данные
+    const resources=await loadResources();
+    renderList(resources);
+    await diagServices();
+    await diagSlots(resources.map(x=>x.id));
+    await diagBookings(resources.map(x=>x.id));
+  }catch(e){
+    listEl.textContent='Ошибка загрузки';
+    rowProbe('loadAll','Ошибка',String(e),'err');
+    log('loadAll error: '+String(e),'err');
+  }finally{
+    listEl.classList.remove('muted');
+  }
 }
 
-/* ========= hooks ========= */
+/* ===== Self-test ===== */
+async function selftest(){
+  diagBody.innerHTML='';
+  rowProbe('В iframe', String(window!==window.top),'Виджет работает внутри Bitrix24','muted');
+  await loadAll();
+}
+
+/* ===== Hooks ===== */
 document.getElementById('bind').onclick=bind;
 document.getElementById('unbind').onclick=unbind;
-document.getElementById('reload').onclick=loadList;
+document.getElementById('reload').onclick=loadAll;
 document.getElementById('selftest').onclick=selftest;
 document.getElementById('q').oninput=filter;
 
-BX24.init(async ()=>{
-  log('BX24 инициализировано. Загружаю список…','muted');
-  await loadList();
-});
+BX24.init(async()=>{ log('BX24 инициализировано. Загружаю…','muted'); await loadAll(); });
 </script>
 </body>
 </html>
