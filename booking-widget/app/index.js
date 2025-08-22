@@ -61,56 +61,89 @@ async function getEnv(){
 /* ---------- Booking loaders ---------- */
 async function loadResources(){
   const items = [];
-  let page = 1, iter = 0, lastRaw = null;
+  let page = 1, iter = 0, lastRaw = null, totalPushed = 0;
 
   while (iter++ < 50) {
     const r = await pCall('booking.v1.resource.list', { select:['id','name','status'], page });
     if (!r.ok) { rowProbe('Resources', 'Ошибка', `${r.error||''} ${r.desc||''}`, 'err'); break; }
+
     lastRaw = r.data;
-    const chunk = (r.data && (r.data.items || r.data)) || [];
-    if (Array.isArray(chunk)) items.push(...chunk);
+    // поддерживаем разные формы ответа: items / resource / resources / result.*
+    const chunk = pickArray(r.data, ['items','resource','resources','list']);
+    if (chunk.length) {
+      chunk.forEach(x => {
+        const m = mapResource(x);
+        if (m.id) { items.push(m); totalPushed++; }
+      });
+    }
+
     const next = (r.data && (r.data.next ?? null));
     if (!next || !chunk.length) break;
     page = typeof next === 'number' ? next : page + 1;
   }
 
-  rowProbe('Resources', String(items.length), items.length ? 'ОК' : 'Пусто', items.length ? 'ok' : 'warn');
+  rowProbe('Resources', String(totalPushed), totalPushed ? 'ОК' : 'Пусто', totalPushed ? 'ok' : 'warn');
 
-  // Отладочный дамп «как есть» — чтобы видеть структуру ответа портала
-  if (!items.length && lastRaw) {
-    log('DEBUG booking.v1.resource.list raw: ' + JSON.stringify(lastRaw).slice(0, 1000) + '…', 'muted');
+  // Отладочный дамп чтобы видеть реальную структуру
+  if (!totalPushed && lastRaw) {
+    log('DEBUG booking.v1.resource.list raw: ' + JSON.stringify(lastRaw), 'muted');
   }
 
-  // Fallback: собрать ID из бронирований
-  if (!items.length) {
+  // Fallback: если ресурс-лист пуст — собираем ID из бронирований
+  if (!totalPushed) {
     const found = await discoverResourcesFromBookings();
     if (found.length) {
       rowProbe('Resources (по бронированиям)', String(found.length), 'Собрано из booking.list', 'warn');
       return found;
     }
   }
+
   return items;
 }
 
+
 async function diagServices(){
-  const r=await pCall('booking.v1.service.list',{select:['id','name','duration','active'],limit:100});
-  if(r.ok){ const arr=(r.data?.items||r.data||[]); rowProbe('Services', String(arr.length), arr.length?'ОК':'Нет услуг', arr.length?'ok':'warn'); }
-  else { rowProbe('Services','Ошибка',`${r.error||''} ${r.desc||''}`,'err'); }
+  const r = await pCall('booking.v1.service.list',{select:['id','name','duration','active'],limit:100});
+  if (r.ok) {
+    const arr = pickArray(r.data, ['items','services','service','list']);
+    rowProbe('Services', String(arr.length), arr.length ? 'ОК' : 'Нет услуг', arr.length ? 'ok' : 'warn');
+  } else {
+    rowProbe('Services','Ошибка',`${r.error||''} ${r.desc||''}`,'err');
+  }
 }
 async function diagSlots(resourceIds){
   const now=new Date(); const to=new Date(now.getTime()+7*86400000);
   const iso=d=>d.toISOString().slice(0,19)+'+00:00';
-  const r=await pCall('booking.v1.slot.list',{filter:{dateFrom:iso(now),dateTo:iso(to),resourceIds:(resourceIds||[]).slice(0,3)}});
-  if(r.ok){ const arr=(r.data?.items||r.data||[]); rowProbe('Slots (7d)', Array.isArray(arr)?String(arr.length):'есть', Array.isArray(arr)&&!arr.length?'нет доступных окон':'', (Array.isArray(arr)&&arr.length)?'ok':'warn'); }
-  else{ const ee=String(r.error||'').toLowerCase(); if(ee.includes('method_not_found')) rowProbe('Slots (7d)','Нет метода','booking.v1.slot.list отсутствует — не критично','warn'); else rowProbe('Slots (7d)','Ошибка',`${r.error||''} ${r.desc||''}`,'err'); }
+  const r=await pCall('booking.v1.slot.list',{
+    filter:{dateFrom:iso(now),dateTo:iso(to),resourceIds:(resourceIds||[]).slice(0,3)}
+  });
+  if(r.ok){
+    const arr = pickArray(r.data, ['items','slots','slot','list']);
+    rowProbe('Slots (7d)', Array.isArray(arr)?String(arr.length):'есть',
+             Array.isArray(arr)&&!arr.length?'нет доступных окон':'',
+             (Array.isArray(arr)&&arr.length)?'ok':'warn');
+  } else {
+    const ee=String(r.error||'').toLowerCase();
+    if(ee.includes('method_not_found')) rowProbe('Slots (7d)','Нет метода','booking.v1.slot.list отсутствует — не критично','warn');
+    else rowProbe('Slots (7d)','Ошибка',`${r.error||''} ${r.desc||''}`,'err');
+  }
 }
+
 async function diagBookings(resourceIds){
   const now=new Date(); const from=new Date(now.getTime()-7*86400000); const to=new Date(now.getTime()+30*86400000);
   const iso=d=>d.toISOString().slice(0,19)+'+00:00';
-  const r=await pCall('booking.v1.booking.list',{filter:{dateFrom:iso(from),dateTo:iso(to),resourceIds:resourceIds||[]},select:['id','status'],limit:100});
-  if(r.ok){ const arr=(r.data?.items||r.data||[]); rowProbe('Bookings (−7..+30d)', String(arr.length), '', arr.length?'ok':'warn'); }
-  else{ rowProbe('Bookings (−7..+30d)','Ошибка',`${r.error||''} ${r.desc||''}`,'err'); }
+  const r=await pCall('booking.v1.booking.list',{
+    filter:{dateFrom:iso(from),dateTo:iso(to),resourceIds:resourceIds||[]},
+    select:['id','status'],limit:100
+  });
+  if(r.ok){
+    const arr = pickArray(r.data, ['items','bookings','list']);
+    rowProbe('Bookings (−7..+30d)', String(arr.length), '', arr.length?'ok':'warn');
+  } else {
+    rowProbe('Bookings (−7..+30d)','Ошибка',`${r.error||''} ${r.desc||''}`,'err');
+  }
 }
+
 
 async function discoverResourcesFromBookings(){
   const now = new Date();
@@ -245,3 +278,25 @@ function boot(){
   },3000);
 }
 document.readyState==='loading' ? document.addEventListener('DOMContentLoaded', boot) : boot();
+// === универсальный извлекатель массива из разных ответов Bitrix ===
+function pickArray(data, keys = []) {
+  if (Array.isArray(data)) return data;
+  if (!data || typeof data !== 'object') return [];
+  for (const k of keys) {
+    const v = data?.[k];
+    if (Array.isArray(v)) return v;
+  }
+  // иногда полезная часть лежит глубже: { result: { resource: [...] } }
+  if (data.result) return pickArray(data.result, keys);
+  return [];
+}
+
+// безопасная мапа ресурса (на случай разных имён полей)
+function mapResource(item) {
+  const id = String(
+    item.id ?? item.ID ?? item.resourceId ?? item.RESOURCE_ID ?? ''
+  );
+  const name = item.name ?? item.NAME ?? item.title ?? item.TITLE ?? '(без названия)';
+  const status = item.status ?? item.STATUS ?? (item.active ? 'active' : 'unknown');
+  return { id, name, status };
+}
