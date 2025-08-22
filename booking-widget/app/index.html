@@ -225,14 +225,59 @@ async function selftest(){
   await loadAll();
 }
 
+// === Глобальные ловушки ошибок, чтобы ничего не «молчало»
+window.addEventListener('error', (e)=>{
+  const msg = 'JS error: ' + (e?.message || String(e));
+  try { const el = document.getElementById('log'); if (el) { const d=document.createElement('div'); d.className='err'; d.textContent=msg; el.appendChild(d); } } catch {}
+  console.error(msg, e?.error || e);
+});
+window.addEventListener('unhandledrejection', (e)=>{
+  const reason = e?.reason;
+  const msg = 'Promise rejection: ' + (reason?.message || String(reason));
+  try { const el = document.getElementById('log'); if (el) { const d=document.createElement('div'); d.className='err'; d.textContent=msg; el.appendChild(d); } } catch {}
+  console.error(msg, reason);
+});
+  
 /* ===== Hooks ===== */
-document.getElementById('bind').onclick=bind;
-document.getElementById('unbind').onclick=unbind;
-document.getElementById('reload').onclick=loadAll;
-document.getElementById('selftest').onclick=selftest;
-document.getElementById('q').oninput=filter;
+document.getElementById('bind').onclick = bind;
+document.getElementById('unbind').onclick = unbind;
+document.getElementById('reload').onclick = loadAll;
+document.getElementById('selftest').onclick = selftest;
+document.getElementById('q').oninput = filter;
 
-BX24.init(async()=>{ log('BX24 инициализировано. Загружаю…','muted'); await loadAll(); });
+// Надёжный бутстрап: пробуем BX24.init; если не сработал — логируем причину и всё равно запускаем диагностику
+(async function boot(){
+  try {
+    // Скрипт BX24 вообще загрузился?
+    if (typeof BX24 === 'undefined') {
+      const msg = '❌ Не найден скрипт Bitrix24 (BX24). Открой виджет внутри портала и проверь, что не блокируется https://api.bitrix24.com/api/v1/.';
+      log(msg, 'err');
+      rowProbe('BX24', 'Нет', 'Скрипт API не загрузился (CSP/AdBlock/открыт не в Б24)', 'err');
+      return; // без BX24 дальнейшие вызовы REST невозможны
+    }
+
+    let inited = false;
+
+    // Нормальный путь
+    BX24.init(async ()=>{
+      inited = true;
+      log('BX24.init: OK. Загружаю…', 'muted');
+      await loadAll();
+    });
+
+    // Подстраховка: если init «завис»/не пришёл (иногда бывает из-за фрейма/старта)
+    setTimeout(async ()=>{
+      if (!inited) {
+        log('⏳ BX24.init не сработал за 3с. Возможно, страница открыта вне портала или API блокируется. Пытаюсь запустить диагностику, чтобы показать причины.', 'warn');
+        rowProbe('BX24.init', 'Таймаут', 'Откройте как приложение в Б24. Если это внутри Б24 — проверьте блокировщики/CSP.', 'warn');
+        try { await loadAll(); } catch (e) { /* ошибки уже выведутся в Статус */ }
+      }
+    }, 3000);
+  } catch (e) {
+    log('Bootstrap error: ' + String(e), 'err');
+    rowProbe('Bootstrap', 'Ошибка', String(e), 'err');
+  }
+})();
 </script>
 </body>
 </html>
